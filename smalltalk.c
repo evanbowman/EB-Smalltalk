@@ -327,6 +327,7 @@ void ST_Image_setGlobal(ST_Image image, const char* varName, ST_Object value)
                                          &extImg->globalScope,
                                          &entry->nodeHeader,
                                          ST_Internal_StringMap_insertComparator)) {
+        free(entry->key);
         free(entry);
     }
 }
