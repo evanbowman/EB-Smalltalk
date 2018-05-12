@@ -57,6 +57,7 @@ void ST_VM_execute(ST_Context context, const ST_CodeBlock *code);
 
 ST_CodeBlock ST_VM_load(ST_Context context, const char *path);
 void ST_VM_store(ST_Context context, const char *path, ST_CodeBlock *code);
+void ST_VM_dispose(ST_Context context, ST_CodeBlock *code);
 
 /* Shortcuts for some common stuff */
 

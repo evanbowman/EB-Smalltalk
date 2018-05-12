@@ -704,20 +704,69 @@ void ST_VM_execute(ST_Context context, const ST_CodeBlock *code) {
 #undef READ_LE_16
 }
 
-/* ST_CodeBlock ST_VM_load(ST_Context context, const char *path) */
-/* { */
-
-/* } */
-
 void ST_VM_store(ST_Context context, const char *path, ST_CodeBlock *code) {
     FILE *out = fopen(path, "w");
     for (ST_Size i = 0; i < code->symbTabSize; ++i) {
         const char *symbolStr = ST_Symbol_toString(context, code->symbTab[i]);
         fputs(symbolStr, out);
-        fputc(';', out);
+        fputc('\n', out);
     }
+    fputs("\n", out);
     fwrite(code->instructions, 1, code->length, out);
     fclose(out);
+}
+
+ST_CodeBlock ST_VM_load(ST_Context context, const char *path) {
+    FILE *in = fopen(path, "r");
+    ST_CodeBlock code;
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read = 0;
+    ST_Size numSymbols = 0;
+    size_t symbolTableEndPos;
+    size_t fileEndPos;
+    if (in == NULL) {
+        printf("bytecode file \"%s\" does not exist!\n", path);
+        exit(EXIT_FAILURE);
+    }
+    while ((read = getline(&line, &len, in)) != -1) {
+        if (!strcmp(line, "\n")) {
+            break; /* Reached symbol table delimiter */
+        }
+        ++numSymbols;
+    }
+    fseek(in, 0, SEEK_SET);
+    code.symbTab = malloc(numSymbols * sizeof(ST_Object));
+    assert(code.symbTab);
+    code.symbTabSize = numSymbols;
+    for (ST_Size i = 0; i < numSymbols; ++i) {
+        getline(&line, &len, in);
+        line[strlen(line) - 1] = '\0';
+        code.symbTab[i] = ST_Context_requestSymbol(context, line);
+    }
+    getline(&line, &len, in); /* Skip symbol table delimiter */
+    symbolTableEndPos = ftell(in);
+    fseek(in, 0, SEEK_END);
+    fileEndPos = ftell(in);
+    fseek(in, symbolTableEndPos, SEEK_SET);
+    code.length = fileEndPos - symbolTableEndPos;
+    code.instructions = malloc(code.length);
+    fgets((char *)code.instructions, code.length, in);
+    fclose(in);
+    if (line)
+        free(line);
+    return code;
+}
+
+void ST_VM_dispose(ST_Context context, ST_CodeBlock *code) {
+    free(code->instructions);
+    free(code->symbTab);
+}
+
+static void ST_VM_dofile(ST_Context context, const char *file) {
+    ST_CodeBlock code = ST_VM_load(context, file);
+    ST_VM_execute(context, &code);
+    ST_VM_dispose(context, &code);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -772,19 +821,6 @@ static ST_Object ST_defineInstanceVariables(ST_Context context, ST_Object self,
     return ST_Context_getNilValue(context);
 }
 
-static void ST_Internal_Context_initNil(ST_Internal_Context *context) {
-    ST_SUBCLASS(context, "Object", "UndefinedObject");
-    context->nilValue = ST_NEW(context, "UndefinedObject");
-}
-
-static void ST_Internal_Context_initBoolean(ST_Internal_Context *context) {
-    ST_SUBCLASS(context, "Object", "Boolean");
-    ST_SUBCLASS(context, "Boolean", "True");
-    ST_SUBCLASS(context, "Boolean", "False");
-    context->trueValue = ST_NEW(context, "True");
-    context->falseValue = ST_NEW(context, "False");
-}
-
 static void
 ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "MessageNotUnderstood");
@@ -835,8 +871,11 @@ ST_Context ST_Context_create() {
     ST_SETMETHOD(context, "Object", "subclass", ST_subclass, 0);
     ST_SETMETHOD(context, "Object", "instanceVariableNames",
                  ST_defineInstanceVariables, 1);
-    ST_Internal_Context_initNil(context);
-    ST_Internal_Context_initBoolean(context);
+    ST_VM_dofile(context, "stdlib/nil.stbc");
+    context->nilValue = ST_NEW(context, "UndefinedObject");
+    ST_VM_dofile(context, "stdlib/boolean.stbc");
+    context->trueValue = ST_NEW(context, "True");
+    context->falseValue = ST_NEW(context, "False");
     ST_Internal_Context_initErrorHandling(context);
     return context;
 }
