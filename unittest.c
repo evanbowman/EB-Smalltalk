@@ -19,22 +19,35 @@ int main() {
     {
         size_t i;
         ST_CodeBlock code;
-        ST_Object symbolTable[] = {ST_Context_requestSymbol(context, "Object"),
-                                   ST_Context_requestSymbol(context, "new")};
-        ST_Byte instructions[] = {
-            ST_VM_OP_PUSHNIL,
-            ST_VM_OP_PUSHTRUE,
-            ST_VM_OP_PUSHFALSE,
-            ST_VM_OP_PUSHNIL,
+        ST_Object symbolTable[] = {
+            ST_Context_requestSymbol(context, "Object"),
+            ST_Context_requestSymbol(context, "new"),
+            ST_Context_requestSymbol(context, "subclass"),
+            ST_Context_requestSymbol(context, "Widjet")};
+        ST_Byte instructions[] = {ST_VM_OP_PUSHNIL,
+                                  ST_VM_OP_PUSHTRUE,
+                                  ST_VM_OP_PUSHFALSE,
+                                  ST_VM_OP_PUSHNIL,
 
-            ST_VM_OP_GETGLOBAL,
-            0,
-            0,
+                                  ST_VM_OP_GETGLOBAL,
+                                  0,
+                                  0,
 
-            ST_VM_OP_SENDMESSAGE,
-            1,
-            0,
-        };
+                                  ST_VM_OP_SENDMESSAGE,
+                                  1,
+                                  0,
+
+                                  ST_VM_OP_GETGLOBAL,
+                                  0,
+                                  0,
+
+                                  ST_VM_OP_SENDMESSAGE,
+                                  2,
+                                  0,
+
+                                  ST_VM_OP_SETGLOBAL,
+                                  3,
+                                  0};
         for (i = 0; i < sizeof(instructions); ++i) {
             printf("%02x ", instructions[i]);
             if ((i + 1) % 16 == 0) {
@@ -44,8 +57,10 @@ int main() {
         puts("");
         code.instructions = instructions;
         code.length = sizeof(instructions);
-        code.symbolTable = symbolTable;
-        ST_VM_eval(context, &code);
+        code.symbTab = symbolTable;
+        code.symbTabSize = sizeof(symbolTable) / sizeof(ST_Object);
+        ST_VM_execute(context, &code);
+        ST_VM_store(context, "code.st.bc", &code);
     }
 
     return EXIT_SUCCESS;

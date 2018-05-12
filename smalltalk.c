@@ -4,9 +4,14 @@
 
 #include "smalltalk.h"
 
-void ST_Internal_Context_pushStack(ST_Context context, ST_Object val);
-void ST_Internal_Context_popStack(ST_Context context);
-ST_Object ST_Internal_Context_refStack(ST_Context context, ST_Size offset);
+struct ST_Internal_Context;
+
+static void ST_Internal_Context_pushStack(struct ST_Internal_Context *context,
+                                          ST_Object val);
+static void ST_Internal_Context_popStack(struct ST_Internal_Context *context);
+static ST_Object
+ST_Internal_Context_refStack(struct ST_Internal_Context *context,
+                             ST_Size offset);
 
 /*//////////////////////////////////////////////////////////////////////////////
 // Helper functions
@@ -14,7 +19,7 @@ ST_Object ST_Internal_Context_refStack(ST_Context context, ST_Size offset);
 
 typedef enum { false, true } bool;
 
-static void ST_Internal_fatalError(ST_Context context, const char *error) {
+static void ST_fatalError(ST_Context context, const char *error) {
     puts(error);
     exit(EXIT_FAILURE);
 }
@@ -25,7 +30,7 @@ typedef enum ST_Cmp {
     ST_Cmp_Eq = 0
 } ST_Cmp;
 
-static inline char *ST_Internal_strdup(const char *s) {
+static inline char *ST_strdup(const char *s) {
     char *d = malloc(strlen(s) + 1);
     if (d == NULL)
         return NULL;
@@ -33,7 +38,7 @@ static inline char *ST_Internal_strdup(const char *s) {
     return d;
 }
 
-static inline int ST_Internal_clamp(int value, int low, int high) {
+static inline int ST_clamp(int value, int low, int high) {
     if (value < low)
         return low;
     else if (value > high)
@@ -46,19 +51,19 @@ static inline int ST_Internal_clamp(int value, int low, int high) {
 // Search Tree (Intrusive BST)
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef struct ST_Internal_BST_Node {
-    struct ST_Internal_BST_Node *left;
-    struct ST_Internal_BST_Node *right;
-} ST_Internal_BST_Node;
+typedef struct ST_BST_Node {
+    struct ST_BST_Node *left;
+    struct ST_BST_Node *right;
+} ST_BST_Node;
 
-static void ST_Internal_BST_Node_init(ST_Internal_BST_Node *node) {
+static void ST_BST_Node_init(ST_BST_Node *node) {
     node->left = NULL;
     node->right = NULL;
 }
 
-static void ST_Internal_BST_splay(ST_Internal_BST_Node **t, void *key,
-                                  ST_Cmp (*comparator)(void *, void *)) {
-    ST_Internal_BST_Node N, *l, *r, *y;
+static void ST_BST_splay(ST_BST_Node **t, void *key,
+                         ST_Cmp (*comparator)(void *, void *)) {
+    ST_BST_Node N, *l, *r, *y;
     N.left = N.right = NULL;
     l = r = &N;
     while (true) {
@@ -98,10 +103,9 @@ static void ST_Internal_BST_splay(ST_Internal_BST_Node **t, void *key,
     (*t)->right = N.left;
 }
 
-static bool ST_Internal_BST_insert(ST_Internal_BST_Node **root,
-                                   ST_Internal_BST_Node *node,
-                                   ST_Cmp (*comparator)(void *, void *)) {
-    ST_Internal_BST_Node *current = *root;
+static bool ST_BST_insert(ST_BST_Node **root, ST_BST_Node *node,
+                          ST_Cmp (*comparator)(void *, void *)) {
+    ST_BST_Node *current = *root;
     if (!*root) {
         *root = node;
         return true;
@@ -130,10 +134,9 @@ static bool ST_Internal_BST_insert(ST_Internal_BST_Node **root,
     };
 }
 
-static ST_Internal_BST_Node *
-ST_Internal_BST_find(ST_Internal_BST_Node **root, void *key,
-                     ST_Cmp (*comp)(void *, void *)) {
-    ST_Internal_BST_Node *current = *root;
+static ST_BST_Node *ST_BST_find(ST_BST_Node **root, void *key,
+                                ST_Cmp (*comp)(void *, void *)) {
+    ST_BST_Node *current = *root;
     if (!*root)
         return NULL;
     while (true) {
@@ -160,14 +163,14 @@ ST_Internal_BST_find(ST_Internal_BST_Node **root, void *key,
 // Symbol Map
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef struct ST_Internal_SymbolMap_Entry {
-    ST_Internal_BST_Node node;
+typedef struct ST_SymbolMap_Entry {
+    ST_BST_Node node;
     ST_Object symbol;
-} ST_Internal_SymbolMap_Entry;
+} ST_SymbolMap_Entry;
 
-static ST_Cmp ST_Internal_SymbolMap_insertComparator(void *left, void *right) {
-    ST_Internal_SymbolMap_Entry *leftEntry = left;
-    ST_Internal_SymbolMap_Entry *rightEntry = right;
+static ST_Cmp ST_SymbolMap_insertComparator(void *left, void *right) {
+    ST_SymbolMap_Entry *leftEntry = left;
+    ST_SymbolMap_Entry *rightEntry = right;
     if (leftEntry->symbol > rightEntry->symbol) {
         return ST_Cmp_Less;
     } else if (leftEntry->symbol < rightEntry->symbol) {
@@ -177,8 +180,8 @@ static ST_Cmp ST_Internal_SymbolMap_insertComparator(void *left, void *right) {
     }
 }
 
-static ST_Cmp ST_Internal_SymbolMap_findComparator(void *left, void *right) {
-    ST_Internal_SymbolMap_Entry *entry = left;
+static ST_Cmp ST_SymbolMap_findComparator(void *left, void *right) {
+    ST_SymbolMap_Entry *entry = left;
     ST_Object *symbol = right;
     if (*symbol < entry->symbol) {
         return ST_Cmp_Less;
@@ -193,14 +196,14 @@ static ST_Cmp ST_Internal_SymbolMap_findComparator(void *left, void *right) {
 // Method
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef ST_Method ST_Internal_ForeignMethod;
-typedef ST_CodeBlock ST_Internal_CompiledMethod;
+typedef ST_Method ST_ForeignMethod;
+typedef ST_CodeBlock ST_CompiledMethod;
 
 typedef struct ST_Internal_Method {
     enum { ST_METHOD_TYPE_FOREIGN, ST_METHOD_TYPE_COMPILED } type;
     union {
-        ST_Internal_ForeignMethod foreignMethod;
-        ST_Internal_CompiledMethod compiledMethod;
+        ST_ForeignMethod foreignMethod;
+        ST_CompiledMethod compiledMethod;
     } payload;
     ST_Size argc;
 } ST_Internal_Method;
@@ -210,28 +213,28 @@ typedef struct ST_Internal_Method {
 /////////////////////////////////////////////////////////////////////////////*/
 
 typedef struct ST_Internal_Object {
-    struct ST_Internal_MethodMap_Entry *methodTree;
+    struct ST_MethodMap_Entry *methodTree;
     struct ST_Internal_Object *class;
     struct ST_Internal_Object *super;
     struct ST_Internal_Object **instanceVariables;
     ST_Size instanceVariableCount;
 } ST_Internal_Object;
 
-typedef struct ST_Internal_MethodMap_Entry {
-    ST_Internal_SymbolMap_Entry header;
+typedef struct ST_MethodMap_Entry {
+    ST_SymbolMap_Entry header;
     ST_Internal_Method method;
-} ST_Internal_MethodMap_Entry;
+} ST_MethodMap_Entry;
 
-ST_Internal_Method *ST_Internal_Object_getMethod(ST_Context context,
-                                                 ST_Internal_Object *obj,
-                                                 ST_Internal_Object *selector) {
+static ST_Internal_Method *
+ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
+                             ST_Internal_Object *selector) {
     ST_Internal_Object *currentClass = obj->class;
     while (true) {
-        ST_Internal_BST_Node *entry = ST_Internal_BST_find(
-            (ST_Internal_BST_Node **)&currentClass->methodTree, &selector,
-            ST_Internal_SymbolMap_findComparator);
+        ST_BST_Node *entry =
+            ST_BST_find((ST_BST_Node **)&currentClass->methodTree, &selector,
+                        ST_SymbolMap_findComparator);
         if (entry) {
-            return &((ST_Internal_MethodMap_Entry *)entry)->method;
+            return &((ST_MethodMap_Entry *)entry)->method;
         } else {
             /* Note: the current dummy implementation of metaclasses works by having a class
                hold a circular reference to itself, so we need to test self/super-equality
@@ -245,9 +248,8 @@ ST_Internal_Method *ST_Internal_Object_getMethod(ST_Context context,
     }
 }
 
-static void ST_Internal_failedMethodLookup(ST_Context context,
-                                           ST_Object receiver,
-                                           ST_Object selector) {
+static void ST_failedMethodLookup(ST_Context context, ST_Object receiver,
+                                  ST_Object selector) {
     ST_Object err = ST_NEW(context, "MessageNotUnderstood");
     ST_Object_sendMessage(
         context, receiver,
@@ -271,7 +273,7 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
             for (i = 0; i < argc; ++i) {
                 ST_Internal_Context_pushStack(context, argv[i]);
             }
-            ST_VM_eval(context, &method->payload.compiledMethod);
+            ST_VM_execute(context, &method->payload.compiledMethod);
             result = ST_Internal_Context_refStack(context, 0);
             ST_Internal_Context_popStack(context); /* Pop result */
             for (i = 0; i < argc; ++i) {
@@ -282,33 +284,29 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
         }
         }
     }
-    ST_Internal_failedMethodLookup(context, receiver, selector);
+    ST_failedMethodLookup(context, receiver, selector);
     return ST_Context_getNilValue(context);
 }
 
 void ST_Object_setMethod(ST_Context context, ST_Object object,
-                         ST_Object selector,
-                         ST_Internal_ForeignMethod foreignMethod,
+                         ST_Object selector, ST_ForeignMethod foreignMethod,
                          ST_Size argc) {
-    ST_Internal_MethodMap_Entry *entry =
-        malloc(sizeof(ST_Internal_MethodMap_Entry));
+    ST_MethodMap_Entry *entry = malloc(sizeof(ST_MethodMap_Entry));
     if (!entry)
-        ST_Internal_fatalError(context, "bad malloc");
-    ST_Internal_BST_Node_init(&entry->header.node);
+        ST_fatalError(context, "bad malloc");
+    ST_BST_Node_init(&entry->header.node);
     entry->header.symbol = selector;
     entry->method.type = ST_METHOD_TYPE_FOREIGN;
     entry->method.payload.foreignMethod = foreignMethod;
     entry->method.argc = argc;
-    if (!ST_Internal_BST_insert(
-            (ST_Internal_BST_Node **)&((ST_Internal_Object *)object)
-                ->methodTree,
-            &entry->header.node, ST_Internal_SymbolMap_insertComparator)) {
+    if (!ST_BST_insert(
+            (ST_BST_Node **)&((ST_Internal_Object *)object)->methodTree,
+            &entry->header.node, ST_SymbolMap_insertComparator)) {
         free(entry);
         return;
     }
-    ST_Internal_BST_splay(
-        (ST_Internal_BST_Node **)&((ST_Internal_Object *)object)->methodTree,
-        &entry->header.node, ST_Internal_SymbolMap_insertComparator);
+    ST_BST_splay((ST_BST_Node **)&((ST_Internal_Object *)object)->methodTree,
+                 &entry->header.node, ST_SymbolMap_insertComparator);
 }
 
 ST_Object ST_Object_getSuper(ST_Context context, ST_Object object) {
@@ -323,8 +321,7 @@ ST_Object ST_Object_getInstanceVar(ST_Context context, ST_Object object,
                                    ST_Size position) {
     ST_Internal_Object *obj = object;
     if (position >= obj->instanceVariableCount) {
-        ST_Internal_fatalError(context,
-                               "Instance variable index out of bounds");
+        ST_fatalError(context, "Instance variable index out of bounds");
     }
     return obj->instanceVariables[position];
 }
@@ -333,8 +330,7 @@ void ST_Object_setInstanceVar(ST_Context context, ST_Object object,
                               ST_Size position, ST_Object value) {
     ST_Internal_Object *obj = object;
     if (position >= obj->instanceVariableCount) {
-        ST_Internal_fatalError(context,
-                               "Instance variable index out of bounds");
+        ST_fatalError(context, "Instance variable index out of bounds");
     }
     obj->instanceVariables[position] = value;
 }
@@ -343,14 +339,14 @@ void ST_Object_setInstanceVar(ST_Context context, ST_Object object,
 // Vector
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef struct ST_Internal_Vector {
+typedef struct ST_Vector {
     char *data;
     ST_Size len;
     ST_Size npos;
     ST_Size elemSize;
-} ST_Internal_Vector;
+} ST_Vector;
 
-int ST_Internal_Vector_init(ST_Internal_Vector *vec, ST_Size elemSize) {
+static int ST_Vector_init(ST_Vector *vec, ST_Size elemSize) {
     vec->data = calloc(1, elemSize);
     if (!vec->data)
         return 0;
@@ -360,7 +356,7 @@ int ST_Internal_Vector_init(ST_Internal_Vector *vec, ST_Size elemSize) {
     return 1;
 }
 
-int ST_Internal_Vector_push(ST_Internal_Vector *vec, const void *element) {
+static int ST_Vector_push(ST_Vector *vec, const void *element) {
     const size_t elemSize = vec->elemSize;
     const int growthRate = 2;
     if (vec->len >= (vec->npos + 1) * elemSize) {
@@ -380,7 +376,7 @@ int ST_Internal_Vector_push(ST_Internal_Vector *vec, const void *element) {
     return 1;
 }
 
-void *ST_Internal_Vector_pop(ST_Internal_Vector *vec) {
+static void *ST_Vector_pop(ST_Vector *vec) {
     if (vec->npos) {
         vec->npos -= 1;
         return vec->data + vec->npos * vec->elemSize;
@@ -388,18 +384,18 @@ void *ST_Internal_Vector_pop(ST_Internal_Vector *vec) {
     return NULL;
 }
 
-void *ST_Internal_Vector_get(ST_Internal_Vector *vec, ST_Size index) {
+static void *ST_Vector_get(ST_Vector *vec, ST_Size index) {
     return vec->data + index * vec->elemSize;
 }
 
-void *ST_Internal_Vector_back(ST_Internal_Vector *vec) {
+__attribute__((unused)) static void *ST_Vector_back(ST_Vector *vec) {
     if (vec->npos -= 0) {
         return NULL;
     }
     return vec->data + (vec->npos - 1) * vec->elemSize;
 }
 
-void ST_Internal_Vector_free(ST_Internal_Vector *vec) {
+__attribute__((unused)) static void ST_Vector_free(ST_Vector *vec) {
     vec->npos = 0;
     vec->elemSize = 0;
     vec->len = 0;
@@ -411,51 +407,52 @@ void ST_Internal_Vector_free(ST_Internal_Vector *vec) {
 /////////////////////////////////////////////////////////////////////////////*/
 
 typedef struct ST_Internal_Context {
-    struct ST_Internal_StringMap_Entry *symbolRegistry;
-    struct ST_Internal_GlobalVarMap_Entry *globalScope;
+    struct ST_StringMap_Entry *symbolRegistry;
+    struct ST_GlobalVarMap_Entry *globalScope;
     ST_Internal_Object *nilValue;
     ST_Internal_Object *trueValue;
     ST_Internal_Object *falseValue;
-    ST_Internal_Vector operandStack;
+    ST_Vector operandStack;
 } ST_Internal_Context;
 
-typedef struct ST_Internal_StringMap_Entry {
-    ST_Internal_BST_Node nodeHeader;
+typedef struct ST_StringMap_Entry {
+    ST_BST_Node nodeHeader;
     char *key;
     void *value;
-} ST_Internal_StringMap_Entry;
+} ST_StringMap_Entry;
 
-ST_Cmp ST_Internal_StringMap_findComparator(void *left, void *right) {
-    ST_Internal_StringMap_Entry *entry = left;
+static ST_Cmp ST_StringMap_findComparator(void *left, void *right) {
+    ST_StringMap_Entry *entry = left;
     const char *searchKey = right;
-    return ST_Internal_clamp(strcmp(entry->key, searchKey), ST_Cmp_Less,
-                             ST_Cmp_Greater);
+    return ST_clamp(strcmp(entry->key, searchKey), ST_Cmp_Less, ST_Cmp_Greater);
 }
 
-ST_Cmp ST_Internal_StringMap_insertComparator(void *left, void *right) {
-    ST_Internal_StringMap_Entry *lhsEntry = left;
-    ST_Internal_StringMap_Entry *rhsEntry = right;
-    return ST_Internal_clamp(strcmp(lhsEntry->key, rhsEntry->key), ST_Cmp_Less,
-                             ST_Cmp_Greater);
+static ST_Cmp ST_StringMap_insertComparator(void *left, void *right) {
+    ST_StringMap_Entry *lhsEntry = left;
+    ST_StringMap_Entry *rhsEntry = right;
+    return ST_clamp(strcmp(lhsEntry->key, rhsEntry->key), ST_Cmp_Less,
+                    ST_Cmp_Greater);
 }
 
-typedef struct ST_Internal_GlobalVarMap_Entry {
-    ST_Internal_SymbolMap_Entry header;
+typedef struct ST_GlobalVarMap_Entry {
+    ST_SymbolMap_Entry header;
     ST_Internal_Object *value;
-} ST_Internal_GlobalVarMap_Entry;
+} ST_GlobalVarMap_Entry;
 
-void ST_Internal_Context_pushStack(ST_Context context, ST_Object val) {
-    ST_Internal_Vector_push(&((ST_Internal_Context *)context)->operandStack,
-                            &val);
+static void ST_Internal_Context_pushStack(ST_Internal_Context *context,
+                                          ST_Object val) {
+    ST_Vector_push(&context->operandStack, &val);
 }
 
-void ST_Internal_Context_popStack(ST_Context context) {
-    ST_Internal_Vector_pop(&((ST_Internal_Context *)context)->operandStack);
+static void ST_Internal_Context_popStack(struct ST_Internal_Context *context) {
+    ST_Vector_pop(&context->operandStack);
 }
 
-ST_Object ST_Internal_Context_refStack(ST_Context context, ST_Size offset) {
-    ST_Internal_Vector *stack = &((ST_Internal_Context *)context)->operandStack;
-    void *result = ST_Internal_Vector_get(stack, stack->npos - (offset + 1));
+static ST_Object
+ST_Internal_Context_refStack(struct ST_Internal_Context *context,
+                             ST_Size offset) {
+    ST_Vector *stack = &context->operandStack;
+    void *result = ST_Vector_get(stack, stack->npos - (offset + 1));
     if (!result) {
         return ST_Context_getNilValue(context);
     }
@@ -463,34 +460,30 @@ ST_Object ST_Internal_Context_refStack(ST_Context context, ST_Size offset) {
 }
 
 ST_Object ST_Context_getGlobal(ST_Context context, ST_Object symbol) {
-    ST_Internal_BST_Node *found;
-    ST_Internal_BST_Node **globalScope =
+    ST_BST_Node *found;
+    ST_BST_Node **globalScope =
         (void *)&((ST_Internal_Context *)context)->globalScope;
-    found = ST_Internal_BST_find(globalScope, &symbol,
-                                 ST_Internal_SymbolMap_findComparator);
+    found = ST_BST_find(globalScope, &symbol, ST_SymbolMap_findComparator);
     if (!found) {
         printf("warning: global variable \"%s\" not found\n",
                ST_Symbol_toString(context, symbol));
         return ST_Context_getNilValue(context);
     }
-    ST_Internal_BST_splay(globalScope, &symbol,
-                          ST_Internal_SymbolMap_findComparator);
-    return ((ST_Internal_GlobalVarMap_Entry *)found)->value;
+    ST_BST_splay(globalScope, &symbol, ST_SymbolMap_findComparator);
+    return ((ST_GlobalVarMap_Entry *)found)->value;
 }
 
 void ST_Context_setGlobal(ST_Context context, ST_Object symbol,
                           ST_Object object) {
     ST_Internal_Context *extCtx = context;
-    ST_Internal_GlobalVarMap_Entry *entry =
-        malloc(sizeof(ST_Internal_GlobalVarMap_Entry));
+    ST_GlobalVarMap_Entry *entry = malloc(sizeof(ST_GlobalVarMap_Entry));
     if (!entry)
-        ST_Internal_fatalError(context, "bad malloc");
-    ST_Internal_BST_Node_init(&entry->header.node);
+        ST_fatalError(context, "bad malloc");
+    ST_BST_Node_init(&entry->header.node);
     entry->header.symbol = symbol;
     entry->value = object;
-    if (!ST_Internal_BST_insert((ST_Internal_BST_Node **)&extCtx->globalScope,
-                                &entry->header.node,
-                                ST_Internal_SymbolMap_insertComparator)) {
+    if (!ST_BST_insert((ST_BST_Node **)&extCtx->globalScope,
+                       &entry->header.node, ST_SymbolMap_insertComparator)) {
         free(entry);
     }
 }
@@ -509,24 +502,23 @@ ST_Object ST_Context_getFalseValue(ST_Context context) {
 
 ST_Object ST_Context_requestSymbol(ST_Context context, const char *symbolName) {
     ST_Internal_Context *extCtx = context;
-    ST_Internal_BST_Node *found = ST_Internal_BST_find(
-        (ST_Internal_BST_Node **)&extCtx->symbolRegistry, (void *)symbolName,
-        ST_Internal_StringMap_findComparator);
-    ST_Internal_StringMap_Entry *newEntry = NULL;
+    ST_BST_Node *found =
+        ST_BST_find((ST_BST_Node **)&extCtx->symbolRegistry, (void *)symbolName,
+                    ST_StringMap_findComparator);
+    ST_StringMap_Entry *newEntry = NULL;
     if (found) {
-        return (ST_Object)((ST_Internal_StringMap_Entry *)found)->value;
+        return (ST_Object)((ST_StringMap_Entry *)found)->value;
     }
-    newEntry = malloc(sizeof(ST_Internal_StringMap_Entry));
+    newEntry = malloc(sizeof(ST_StringMap_Entry));
     if (!newEntry)
-        ST_Internal_fatalError(context, "bad malloc");
-    ST_Internal_BST_Node_init(&newEntry->nodeHeader);
-    newEntry->key = ST_Internal_strdup(symbolName);
+        ST_fatalError(context, "bad malloc");
+    ST_BST_Node_init(&newEntry->nodeHeader);
+    newEntry->key = ST_strdup(symbolName);
     if (!newEntry->key)
-        ST_Internal_fatalError(context, "bad malloc");
+        ST_fatalError(context, "bad malloc");
     newEntry->value = ST_NEW(context, "Symbol");
-    if (!ST_Internal_BST_insert(
-            (ST_Internal_BST_Node **)&extCtx->symbolRegistry,
-            &newEntry->nodeHeader, ST_Internal_StringMap_insertComparator)) {
+    if (!ST_BST_insert((ST_BST_Node **)&extCtx->symbolRegistry,
+                       &newEntry->nodeHeader, ST_StringMap_insertComparator)) {
         free(newEntry->key);
         free(newEntry);
         return ST_Context_getNilValue(context);
@@ -534,19 +526,19 @@ ST_Object ST_Context_requestSymbol(ST_Context context, const char *symbolName) {
     return newEntry->value;
 }
 
-const char *ST_Internal_recDecodeSymbol(ST_Internal_StringMap_Entry *tree,
-                                        ST_Object symbol) {
+static const char *ST_recDecodeSymbol(ST_StringMap_Entry *tree,
+                                      ST_Object symbol) {
     if ((ST_Object)tree->value == symbol)
         return tree->key;
     if (tree->nodeHeader.left) {
-        const char *found = ST_Internal_recDecodeSymbol(
-            ((ST_Internal_StringMap_Entry *)tree->nodeHeader.left), symbol);
+        const char *found = ST_recDecodeSymbol(
+            ((ST_StringMap_Entry *)tree->nodeHeader.left), symbol);
         if (found)
             return found;
     }
     if (tree->nodeHeader.right) {
-        const char *found = ST_Internal_recDecodeSymbol(
-            ((ST_Internal_StringMap_Entry *)tree->nodeHeader.right), symbol);
+        const char *found = ST_recDecodeSymbol(
+            ((ST_StringMap_Entry *)tree->nodeHeader.right), symbol);
         if (found)
             return found;
     }
@@ -555,9 +547,9 @@ const char *ST_Internal_recDecodeSymbol(ST_Internal_StringMap_Entry *tree,
 
 const char *ST_Symbol_toString(ST_Context context, ST_Object symbol) {
     ST_Internal_Context *ctx = context;
-    ST_Internal_StringMap_Entry *symbolRegistry = ctx->symbolRegistry;
+    ST_StringMap_Entry *symbolRegistry = ctx->symbolRegistry;
     if (symbolRegistry) {
-        return ST_Internal_recDecodeSymbol(symbolRegistry, symbol);
+        return ST_recDecodeSymbol(symbolRegistry, symbol);
     }
     return NULL;
 }
@@ -568,20 +560,20 @@ const char *ST_Symbol_toString(ST_Context context, ST_Object symbol) {
 
 #include "opcode.h"
 
-void ST_Internal_VM_invokeCompiledMethod(ST_Internal_Context *context,
-                                         ST_Size *ip) {
+static void ST_VM_invokeCompiledMethod(ST_Internal_Context *context,
+                                       ST_Size *ip) {
     assert(!"Compiled methods unimplemented");
     /* TODO: store ip, store context, set context to method's bc, continue
        evaluation. */
 }
 
-typedef void (*ST_Internal_VM_FFIHandler)(ST_Internal_Context *context,
-                                          ST_Object receiver,
-                                          ST_Internal_Method *method);
+typedef void (*ST_VM_FFIHandler)(ST_Internal_Context *context,
+                                 ST_Object receiver,
+                                 ST_Internal_Method *method);
 
-void ST_Internal_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
-                                             ST_Object receiver,
-                                             ST_Internal_Method *method) {
+static void ST_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
+                                           ST_Object receiver,
+                                           ST_Internal_Method *method) {
     ST_Object *argv = malloc(sizeof(ST_Object) * method->argc);
     ST_Size i;
     for (i = 0; i < method->argc; ++i) {
@@ -593,25 +585,24 @@ void ST_Internal_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
     free(argv);
 }
 
-void ST_Internal_VM_invokeForeignMethod_1Arg(ST_Internal_Context *context,
-                                             ST_Object receiver,
-                                             ST_Internal_Method *method) {
+static void ST_VM_invokeForeignMethod_1Arg(ST_Internal_Context *context,
+                                           ST_Object receiver,
+                                           ST_Internal_Method *method) {
     ST_Object arg = ST_Internal_Context_refStack(context, 0);
     ST_Internal_Context_popStack(context);
     ST_Internal_Context_pushStack(
         context, method->payload.foreignMethod(context, receiver, &arg));
 }
 
-void ST_Internal_VM_invokeForeignMethod_0Arg(ST_Internal_Context *context,
-                                             ST_Object receiver,
-                                             ST_Internal_Method *method) {
+static void ST_VM_invokeForeignMethod_0Arg(ST_Internal_Context *context,
+                                           ST_Object receiver,
+                                           ST_Internal_Method *method) {
     ST_Internal_Context_pushStack(
         context, method->payload.foreignMethod(context, receiver, NULL));
 }
 
-void ST_Internal_VM_sendMessage(ST_Internal_Context *context, ST_Size *ip,
-                                ST_Object selector,
-                                ST_Internal_VM_FFIHandler ffiHandler) {
+static void ST_VM_sendMessage(ST_Internal_Context *context, ST_Size *ip,
+                              ST_Object selector, ST_VM_FFIHandler ffiHandler) {
     ST_Object receiver = ST_Internal_Context_refStack(context, 0);
     ST_Internal_Method *method =
         ST_Internal_Object_getMethod(context, receiver, selector);
@@ -623,36 +614,38 @@ void ST_Internal_VM_sendMessage(ST_Internal_Context *context, ST_Size *ip,
             break;
 
         case ST_METHOD_TYPE_COMPILED:
-            ST_Internal_VM_invokeCompiledMethod(context, ip);
+            ST_VM_invokeCompiledMethod(context, ip);
             break;
         }
     } else {
-        ST_Internal_failedMethodLookup(context, receiver, selector);
+        ST_failedMethodLookup(context, receiver, selector);
     }
 }
 
-typedef unsigned short ST_SymbolTable_Index;
+typedef unsigned short LE16;
 
-void ST_VM_eval(ST_Context context, ST_CodeBlock *code) {
-#define READ_LE_16()                                                           \
-    ((unsigned short)imem[ip + 1]) | ((unsigned short)imem[ip + 2] << 8)
+static inline LE16 ST_readLE16(const ST_Byte *raw) {
+    return ((LE16)*raw) | ((LE16) * (raw + 1) << 8);
+}
+
+void ST_VM_execute(ST_Context context, const ST_CodeBlock *code) {
     ST_Size ip = 0;
     const ST_Byte *imem = code->instructions;
     while (ip < code->length) {
         switch (imem[ip]) {
         case ST_VM_OP_GETGLOBAL: {
-            ST_Object globalVarSymb = code->symbolTable[READ_LE_16()];
-            ST_Object global = ST_Context_getGlobal(context, globalVarSymb);
+            ST_Object gVarSymb = code->symbTab[ST_readLE16(imem + ip + 1)];
+            ST_Object global = ST_Context_getGlobal(context, gVarSymb);
             ST_Internal_Context_pushStack(context, global);
-            ip += 1 + sizeof(ST_SymbolTable_Index);
+            ip += 1 + sizeof(unsigned short);
         } break;
 
         case ST_VM_OP_SETGLOBAL: {
-            ST_Object globalVarSymb = code->symbolTable[READ_LE_16()];
-            ST_Context_setGlobal(context, globalVarSymb,
+            ST_Object gVarSymb = code->symbTab[ST_readLE16(imem + ip + 1)];
+            ST_Context_setGlobal(context, gVarSymb,
                                  ST_Internal_Context_refStack(context, 0));
             ST_Internal_Context_popStack(context);
-            ip += 1 + sizeof(ST_SymbolTable_Index);
+            ip += 1 + sizeof(unsigned short);
         } break;
 
         case ST_VM_OP_PUSHNIL:
@@ -673,25 +666,34 @@ void ST_VM_eval(ST_Context context, ST_CodeBlock *code) {
             ip += 1;
             break;
 
+        case ST_VM_OP_PUSHSYMBOL:
+            ST_Internal_Context_pushStack(
+                context, code->symbTab[ST_readLE16(imem + ip + 1)]);
+            ip += 1 + sizeof(unsigned short);
+            break;
+
         case ST_VM_OP_SENDMESSAGE: {
-            const ST_Object selector = code->symbolTable[READ_LE_16()];
-            ip += 1 + sizeof(ST_SymbolTable_Index);
-            ST_Internal_VM_sendMessage(context, &ip, selector,
-                                       ST_Internal_VM_invokeForeignMethod_NArg);
+            const ST_Object selector =
+                code->symbTab[ST_readLE16(imem + ip + 1)];
+            ip += 1 + sizeof(unsigned short);
+            ST_VM_sendMessage(context, &ip, selector,
+                              ST_VM_invokeForeignMethod_NArg);
         } break;
 
         case ST_VM_OP_SENDMESSAGE0: {
-            const ST_Object selector = code->symbolTable[READ_LE_16()];
-            ip += 1 + sizeof(ST_SymbolTable_Index);
-            ST_Internal_VM_sendMessage(context, &ip, selector,
-                                       ST_Internal_VM_invokeForeignMethod_0Arg);
+            const ST_Object selector =
+                code->symbTab[ST_readLE16(imem + ip + 1)];
+            ip += 1 + sizeof(unsigned short);
+            ST_VM_sendMessage(context, &ip, selector,
+                              ST_VM_invokeForeignMethod_0Arg);
         } break;
 
         case ST_VM_OP_SENDMESSAGE1: {
-            ip += 1 + sizeof(ST_SymbolTable_Index);
-            const ST_Object selector = code->symbolTable[READ_LE_16()];
-            ST_Internal_VM_sendMessage(context, &ip, selector,
-                                       ST_Internal_VM_invokeForeignMethod_1Arg);
+            ip += 1 + sizeof(unsigned short);
+            const ST_Object selector =
+                code->symbTab[ST_readLE16(imem + ip + 1)];
+            ST_VM_sendMessage(context, &ip, selector,
+                              ST_VM_invokeForeignMethod_1Arg);
         } break;
 
         default:
@@ -700,6 +702,22 @@ void ST_VM_eval(ST_Context context, ST_CodeBlock *code) {
         }
     }
 #undef READ_LE_16
+}
+
+/* ST_CodeBlock ST_VM_load(ST_Context context, const char *path) */
+/* { */
+
+/* } */
+
+void ST_VM_store(ST_Context context, const char *path, ST_CodeBlock *code) {
+    FILE *out = fopen(path, "w");
+    for (ST_Size i = 0; i < code->symbTabSize; ++i) {
+        const char *symbolStr = ST_Symbol_toString(context, code->symbTab[i]);
+        fputs(symbolStr, out);
+        fputc(';', out);
+    }
+    fwrite(code->instructions, 1, code->length, out);
+    fclose(out);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -712,11 +730,11 @@ void ST_VM_eval(ST_Context context, ST_CodeBlock *code) {
 // Language types and methods
 /////////////////////////////////////////////////////////////////////////////*/
 
-static ST_Object ST_Internal_allocateObject(ST_Context context, ST_Object self,
-                                            ST_Object argv[]) {
+static ST_Object ST_allocateObject(ST_Context context, ST_Object self,
+                                   ST_Object argv[]) {
     ST_Internal_Object *obj = malloc(sizeof(ST_Internal_Object));
     if (!obj)
-        ST_Internal_fatalError(context, "bad malloc");
+        ST_fatalError(context, "bad malloc");
     obj->methodTree = NULL;
     /* Note: because the receiver of a 'new' message will always be a class (or metaclass) */
     /* But, still, TODO: implement real metaclasses. */
@@ -725,44 +743,41 @@ static ST_Object ST_Internal_allocateObject(ST_Context context, ST_Object self,
     return obj;
 }
 
-static ST_Object ST_Internal_subclass(ST_Context context, ST_Object self,
-                                      ST_Object argv[]) {
+static ST_Object ST_subclass(ST_Context context, ST_Object self,
+                             ST_Object argv[]) {
     ST_Object newSymb;
     ST_Internal_Object *sub;
     newSymb = ST_Context_requestSymbol(context, "new");
-    sub = ST_Internal_allocateObject(context, self, NULL);
+    sub = ST_allocateObject(context, self, NULL);
     sub->class = sub;
     sub->super = ((ST_Internal_Object *)self)->class;
-    ST_Object_setMethod(context, sub, newSymb, ST_Internal_allocateObject, 0);
+    ST_Object_setMethod(context, sub, newSymb, ST_allocateObject, 0);
     return sub;
 }
 
-static ST_Object ST_Internal_doesNotUnderstand(ST_Context context,
-                                               ST_Object self,
-                                               ST_Object argv[]) {
+static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
+                                      ST_Object argv[]) {
     puts("TODO: message not understood...");
     return ST_Context_getNilValue(context);
 }
 
-static ST_Object ST_Internal_defineInstanceVariables(ST_Context context,
-                                                     ST_Object self,
-                                                     ST_Object argv[]) {
+static ST_Object ST_defineInstanceVariables(ST_Context context, ST_Object self,
+                                            ST_Object argv[]) {
     if (((ST_Internal_Object *)self)->instanceVariables) {
-        ST_Internal_fatalError(context,
-                               "Receiver class already has instance variables."
+        ST_fatalError(context, "Receiver class already has instance variables."
                                " The implementation does not yet support "
                                "redefinition of instance variables.");
     }
-    ST_Internal_fatalError(context, "instanceVariableNames unimplemented");
+    ST_fatalError(context, "instanceVariableNames unimplemented");
     return ST_Context_getNilValue(context);
 }
 
-static void ST_Internal_initNil(ST_Internal_Context *context) {
+static void ST_Internal_Context_initNil(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "UndefinedObject");
     context->nilValue = ST_NEW(context, "UndefinedObject");
 }
 
-static void ST_Internal_initBoolean(ST_Internal_Context *context) {
+static void ST_Internal_Context_initBoolean(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "Boolean");
     ST_SUBCLASS(context, "Boolean", "True");
     ST_SUBCLASS(context, "Boolean", "False");
@@ -770,23 +785,23 @@ static void ST_Internal_initBoolean(ST_Internal_Context *context) {
     context->falseValue = ST_NEW(context, "False");
 }
 
-static void ST_Internal_initErrorHandling(ST_Internal_Context *context) {
+static void
+ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "MessageNotUnderstood");
-    ST_SETMETHOD(context, "Object", "doesNotUnderstand",
-                 ST_Internal_doesNotUnderstand, 1);
+    ST_SETMETHOD(context, "Object", "doesNotUnderstand", ST_doesNotUnderstand,
+                 1);
     ST_SUBCLASS(context, "Object", "Message");
 }
 
-void ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
+static void ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     /* We need to do things manually for a bit, until we've defined the
-       symbol class and the new method, because most of the core functions
-       depend on Symbol. */
+       symbol class and the new method, because most of the functions in
+       the runtime depend on Symbol. */
     ST_Internal_Object *cObject = calloc(1, sizeof(ST_Internal_Object));
     ST_Internal_Object *cSymbol = calloc(1, sizeof(ST_Internal_Object));
     ST_Internal_Object *symbolSymbol = calloc(1, sizeof(ST_Internal_Object));
     ST_Internal_Object *newSymbol = calloc(1, sizeof(ST_Internal_Object));
-    ST_Internal_StringMap_Entry *newEntry =
-        calloc(1, sizeof(ST_Internal_StringMap_Entry));
+    ST_StringMap_Entry *newEntry = calloc(1, sizeof(ST_StringMap_Entry));
     assert(cObject && cSymbol && symbolSymbol && newSymbol && newEntry);
     cObject->class = cObject;
     cObject->super = cObject;
@@ -794,21 +809,19 @@ void ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     cSymbol->class = cSymbol;
     symbolSymbol->class = cSymbol;
     newSymbol->class = cSymbol;
-    context->symbolRegistry = calloc(1, sizeof(ST_Internal_StringMap_Entry));
-    context->symbolRegistry->key = ST_Internal_strdup("Symbol");
+    context->symbolRegistry = calloc(1, sizeof(ST_StringMap_Entry));
+    context->symbolRegistry->key = ST_strdup("Symbol");
     context->symbolRegistry->value = symbolSymbol;
-    context->globalScope = calloc(1, sizeof(ST_Internal_GlobalVarMap_Entry));
+    context->globalScope = calloc(1, sizeof(ST_GlobalVarMap_Entry));
     context->globalScope->header.symbol = symbolSymbol;
     context->globalScope->value = cSymbol;
     assert(ST_Context_requestSymbol(context, "Symbol") == symbolSymbol);
-    newEntry->key = ST_Internal_strdup("new");
+    newEntry->key = ST_strdup("new");
     newEntry->value = newSymbol;
-    ST_Internal_BST_insert((ST_Internal_BST_Node **)&context->symbolRegistry,
-                           &newEntry->nodeHeader,
-                           ST_Internal_StringMap_insertComparator);
+    ST_BST_insert((ST_BST_Node **)&context->symbolRegistry,
+                  &newEntry->nodeHeader, ST_StringMap_insertComparator);
     assert(ST_Context_requestSymbol(context, "new") == newSymbol);
-    ST_Object_setMethod(context, cObject, newSymbol, ST_Internal_allocateObject,
-                        0);
+    ST_Object_setMethod(context, cObject, newSymbol, ST_allocateObject, 0);
     ST_Context_setGlobal(context, ST_Context_requestSymbol(context, "Object"),
                          cObject);
 }
@@ -816,15 +829,14 @@ void ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
 ST_Context ST_Context_create() {
     ST_Internal_Context *context = malloc(sizeof(ST_Internal_Context));
     if (!context)
-        ST_Internal_fatalError(context, "bad malloc");
+        ST_fatalError(context, "bad malloc");
     ST_Internal_Context_bootstrap(context);
-    ST_Internal_Vector_init(&context->operandStack,
-                            sizeof(ST_Internal_Object *));
-    ST_SETMETHOD(context, "Object", "subclass", ST_Internal_subclass, 0);
+    ST_Vector_init(&context->operandStack, sizeof(ST_Internal_Object *));
+    ST_SETMETHOD(context, "Object", "subclass", ST_subclass, 0);
     ST_SETMETHOD(context, "Object", "instanceVariableNames",
-                 ST_Internal_defineInstanceVariables, 1);
-    ST_Internal_initNil(context);
-    ST_Internal_initBoolean(context);
-    ST_Internal_initErrorHandling(context);
+                 ST_defineInstanceVariables, 1);
+    ST_Internal_Context_initNil(context);
+    ST_Internal_Context_initBoolean(context);
+    ST_Internal_Context_initErrorHandling(context);
     return context;
 }

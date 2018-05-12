@@ -10,3 +10,7 @@ add_executable(unittest
 
 target_link_libraries(unittest
   smalltalk)
+
+add_custom_command(TARGET smalltalk
+  PRE_LINK
+  COMMAND clang-format --style=file -i *.c *.h)

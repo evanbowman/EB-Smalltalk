@@ -47,12 +47,16 @@ ST_Object ST_Context_getTrueValue(ST_Context context);
 ST_Object ST_Context_getFalseValue(ST_Context context);
 
 typedef struct ST_CodeBlock {
-    ST_Object *symbolTable;
+    ST_Object *symbTab;
+    ST_Size symbTabSize;
     ST_Byte *instructions;
     ST_Size length;
 } ST_CodeBlock;
 
-void ST_VM_eval(ST_Context context, ST_CodeBlock *code);
+void ST_VM_execute(ST_Context context, const ST_CodeBlock *code);
+
+ST_CodeBlock ST_VM_load(ST_Context context, const char *path);
+void ST_VM_store(ST_Context context, const char *path, ST_CodeBlock *code);
 
 /* Shortcuts for some common stuff */
 
