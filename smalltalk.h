@@ -2,57 +2,98 @@
 #ifndef SMALLTALK_H
 #define SMALLTALK_H
 
-typedef unsigned long   ST_Size;
+#include <stdlib.h>
+
+typedef size_t          ST_Size;
 typedef void*           ST_OpaqueStruct;
-typedef ST_OpaqueStruct ST_Image;
+typedef ST_OpaqueStruct ST_Context;
 typedef ST_OpaqueStruct ST_Object;
-typedef ST_Size         ST_Symbol;
+typedef unsigned char   ST_Byte;
 
-typedef ST_Object (*ST_Method)(ST_Image,
-                               ST_Object,
-                               ST_Size,
-                               ST_Object[]);
+typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
 
-void ST_Object_setMethod(ST_Image image,
-                         ST_Object object,
-                         ST_Symbol selector,
-                         ST_Method method);
-
-ST_Object ST_Object_sendMessage(ST_Image image,
+ST_Object ST_Object_sendMessage(ST_Context context,
                                 ST_Object receiver,
-                                ST_Symbol selector,
+                                ST_Object selector,
                                 ST_Size argc,
                                 ST_Object argv[]);
 
-ST_Object ST_Object_getSuper(ST_Image image,
+void ST_Object_setMethod(ST_Context context,
+                         ST_Object object,
+                         ST_Object selector,
+                         ST_Method method,
+                         ST_Size argc);
+
+ST_Object ST_Object_getSuper(ST_Context context,
                              ST_Object object);
 
-ST_Object ST_Object_getClass(ST_Image image,
+ST_Object ST_Object_getClass(ST_Context context,
                              ST_Object object);
 
-ST_Object ST_Object_getInstanceVar(ST_Image image,
+ST_Object ST_Object_getInstanceVar(ST_Context context,
                                    ST_Object object,
                                    ST_Size position);
 
-void ST_Object_setInstanceVar(ST_Image image,
+void ST_Object_setInstanceVar(ST_Context context,
                               ST_Object object,
                               ST_Size position,
                               ST_Object value);
 
-ST_Image ST_Image_create();
+ST_Context ST_Context_create();
 
-ST_Object ST_Image_getGlobal(ST_Image image, const char* varName);
+enum { ST_UNKNOWN_SYMBOL };
+ST_Object ST_Context_requestSymbol(ST_Context context,
+                                   const char* symbolName);
+const char* ST_Symbol_toString(ST_Context context, ST_Object symbol);
 
-ST_Object ST_Image_getNilValue(ST_Image image);
-ST_Object ST_Image_getTrueValue(ST_Image image);
-ST_Object ST_Image_getFalseValue(ST_Image image);
+void ST_Context_setGlobal(ST_Context context, ST_Object symbol,
+                          ST_Object value);
 
-void ST_Image_setGlobal(ST_Image image, const char* varName, ST_Object value);
+ST_Object ST_Context_getGlobal(ST_Context context, ST_Object symbol);
 
-ST_Symbol ST_Image_requestSymbol(ST_Image image,
-                                 const char* symbolName);
+ST_Object ST_Context_getNilValue(ST_Context context);
 
-const char* ST_Symbol_toString(ST_Image image,
-                               ST_Symbol symbol);
+ST_Object ST_Context_getTrueValue(ST_Context context);
+
+ST_Object ST_Context_getFalseValue(ST_Context context);
+
+typedef struct ST_CodeBlock {
+    ST_Object* symbolTable;
+    ST_Byte* instructions;
+    ST_Size length;
+} ST_CodeBlock;
+
+void ST_VM_eval(ST_Context context, ST_CodeBlock* code);
+
+/* Shortcuts for some common stuff */
+
+#define ST_UNARYSEND(CONTEXT, OBJ, MESSAGE) \
+    ST_Object_sendMessage(CONTEXT, OBJ, \
+                          ST_Context_requestSymbol(CONTEXT, MESSAGE), 0, NULL)
+
+#define ST_NEW(CONTEXT, CLASSNAME_CSTR)                                 \
+    ST_UNARYSEND(CONTEXT,                                               \
+                 ST_Context_getGlobal(CONTEXT,                          \
+                                      ST_Context_requestSymbol(CONTEXT, CLASSNAME_CSTR)), \
+                 "new")
+
+#define ST_INIT(CONTEXT, OBJ, ARGC, ARGV)        \
+    ST_Object_sendMessage(CONTEXT, OBJ, \
+                          ST_Context_requestSymbol(CONTEXT, "init"), ARGC, ARGV)
+
+#define ST_SUBCLASS(CONTEXT, BASE_CLASSNAME_STR, DERIVED_CLASSNAME_STR) \
+    ST_Context_setGlobal(CONTEXT, \
+                         ST_Context_requestSymbol(CONTEXT, DERIVED_CLASSNAME_STR), \
+                         ST_Object_sendMessage(CONTEXT,                 \
+                                               ST_Context_getGlobal(context, \
+                             ST_Context_requestSymbol(CONTEXT, BASE_CLASSNAME_STR)), \
+                          ST_Context_requestSymbol(CONTEXT, "subclass"), \
+                          0, NULL))
+
+#define ST_SETMETHOD(CONTEXT, CNAME, MNAME, C_FUNC, ARGC)    \
+    ST_Object_setMethod(CONTEXT, \
+                        ST_Context_getGlobal(CONTEXT, \
+                                             ST_Context_requestSymbol(CONTEXT, CNAME)), \
+                        ST_Context_requestSymbol(CONTEXT, MNAME), C_FUNC, ARGC)
 
 #endif  /* SMALLTALK_H */

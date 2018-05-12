@@ -1,0 +1,16 @@
+#ifndef OPCODE_H
+#define OPCODE_H
+
+typedef enum ST_VM_Opcode {
+    ST_VM_OP_GETGLOBAL,
+    ST_VM_OP_SETGLOBAL,
+    ST_VM_OP_PUSHNIL,
+    ST_VM_OP_PUSHTRUE,
+    ST_VM_OP_PUSHFALSE,
+    ST_VM_OP_SENDMESSAGE,
+    ST_VM_OP_SENDMESSAGE0,
+    ST_VM_OP_SENDMESSAGE1,
+    ST_VM_OP_DUP,
+} ST_VM_Opcode;
+
+#endif // OPCODE_H
