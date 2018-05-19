@@ -289,9 +289,8 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
                           method->payload.compiledMethod.offset);
             result = ST_Internal_Context_refStack(context, 0);
             ST_Internal_Context_popStack(context); /* Pop result */
-            for (i = 0; i < argc; ++i) {
-                ST_Internal_Context_popStack(
-                    context); /* Need to pop argv too */
+            for (i = 0; i < argc; ++i) {           /* Need to pop argv too */
+                ST_Internal_Context_popStack(context);
             }
             return result;
         }
@@ -299,6 +298,18 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
     }
     ST_failedMethodLookup(context, receiver, selector);
     return ST_Context_getNilValue(context);
+}
+
+static void ST_Internal_Object_insertMethodEntry(ST_Internal_Object *object,
+                                                 ST_MethodMap_Entry *entry) {
+    if (!ST_BST_insert(
+            (ST_BST_Node **)&((ST_Internal_Object *)object)->methodTree,
+            &entry->header.node, ST_SymbolMap_insertComparator)) {
+        free(entry);
+        return;
+    }
+    ST_BST_splay((ST_BST_Node **)&((ST_Internal_Object *)object)->methodTree,
+                 &entry->header.node, ST_SymbolMap_insertComparator);
 }
 
 void ST_Object_setMethod(ST_Context context, ST_Object object,
@@ -312,14 +323,7 @@ void ST_Object_setMethod(ST_Context context, ST_Object object,
     entry->method.type = ST_METHOD_TYPE_FOREIGN;
     entry->method.payload.foreignMethod = foreignMethod;
     entry->method.argc = argc;
-    if (!ST_BST_insert(
-            (ST_BST_Node **)&((ST_Internal_Object *)object)->methodTree,
-            &entry->header.node, ST_SymbolMap_insertComparator)) {
-        free(entry);
-        return;
-    }
-    ST_BST_splay((ST_BST_Node **)&((ST_Internal_Object *)object)->methodTree,
-                 &entry->header.node, ST_SymbolMap_insertComparator);
+    ST_Internal_Object_insertMethodEntry(object, entry);
 }
 
 ST_Object ST_Object_getSuper(ST_Context context, ST_Object object) {
@@ -593,6 +597,12 @@ static inline ST_LE16 ST_readLE16(const ST_VM_Frame *f, ST_Size offset) {
     return ((ST_LE16)*base) | ((ST_LE16) * (base + 1) << 8);
 }
 
+static inline ST_LE16 ST_readLE32(const ST_VM_Frame *f, ST_Size offset) {
+    const ST_Byte *base = f->code->instructions + f->ip + offset;
+    return ((ST_LE16)*base) | ((ST_LE16) * (base + 1) << 8) |
+           ((ST_LE16) * (base + 2) << 16) | ((ST_LE16) * (base + 3) << 24);
+}
+
 static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
     while (frame->ip < frame->code->length) {
         switch (frame->code->instructions[frame->ip]) {
@@ -664,18 +674,22 @@ static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
         } break;
 
         case ST_VM_OP_SETMETHOD: {
-            assert(!"setmethod bytecode unimplemented");
-            /* const ST_Object selector = code->symbTab[ST_readLE16(frame, 1)]; */
-            /* const ST_Byte argc = frame->code->instructions[frame->ip + 3]; */
-            /* ST_MethodMap_Entry *entry = malloc(sizeof(ST_MethodMap_Entry)); */
-            /* frame->ip += 3; */
-            /* ST_BST_Node_init(&entry->header.node); */
-            /* entry->header.symbol = selector; */
-            /* entry->method.type = ST_METHOD_TYPE_COMPILED; */
-            /* entry->method.argc = argc; */
-            /* entry->method.payload.compiledMethod.source = code; */
-            /* entry->method.payload.compiledMethod.offset = frame->ip; */
-            /* frame->ip += ST_readLE32(frame, 1) + sizeof(ST_LE32); */
+            const ST_Object selector =
+                frame->code->symbTab[ST_readLE16(frame, 1)];
+            const ST_Object target = ST_Internal_Context_refStack(context, 0);
+            const ST_Byte argc = frame->code->instructions[frame->ip + 3];
+            ST_MethodMap_Entry *entry = malloc(sizeof(ST_MethodMap_Entry));
+            frame->ip += 3;
+            ST_BST_Node_init(&entry->header.node);
+            entry->header.symbol = selector;
+            entry->method.type = ST_METHOD_TYPE_COMPILED;
+            entry->method.argc = argc;
+            entry->method.payload.compiledMethod.source = frame->code;
+            entry->method.payload.compiledMethod.offset =
+                frame->ip + sizeof(ST_LE32) + 1;
+            ST_Internal_Object_insertMethodEntry(target, entry);
+            ST_Internal_Context_popStack(context);
+            frame->ip += ST_readLE32(frame, 1) + sizeof(ST_LE32) + 1;
         } break;
 
         case ST_VM_OP_RETURN: {
@@ -702,6 +716,18 @@ static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
             puts("TODO: setivar");
             exit(EXIT_FAILURE);
         } break;
+
+        case ST_VM_OP_DUP: {
+            ST_Object top = ST_Internal_Context_refStack(context, 0);
+            ST_Internal_Context_pushStack(context, top);
+            ++frame->ip;
+        } break;
+
+        case ST_VM_OP_POP: {
+            ST_Internal_Context_popStack(context);
+            ++frame->ip;
+            break;
+        }
 
         default:
             printf("evaluation failure: invalid bytecode: %d\n",
