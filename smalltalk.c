@@ -853,6 +853,7 @@ static ST_Object ST_defineInstanceVariables(ST_Context context, ST_Object self,
                                " The implementation does not yet support "
                                "redefinition of instance variables.");
     }
+
     ST_fatalError(context, "instanceVariableNames unimplemented");
     return ST_Context_getNilValue(context);
 }
