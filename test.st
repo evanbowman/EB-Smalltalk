@@ -1,0 +1,2 @@
+
+var := Object new.
