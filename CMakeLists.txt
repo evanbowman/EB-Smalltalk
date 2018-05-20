@@ -2,14 +2,13 @@ cmake_minimum_required(VERSION 2.8)
 
 add_definitions("-pedantic -Werror -Wall")
 
-add_library(smalltalk
-  smalltalk.c)
+add_library(smalltalk smalltalk.c)
 
-add_executable(unittest
-  unittest.c)
+add_executable(unittest unittest.c)
+target_link_libraries(unittest smalltalk)
 
-target_link_libraries(unittest
-  smalltalk)
+add_executable(svm svm.c)
+target_link_libraries(svm smalltalk)
 
 add_custom_command(TARGET smalltalk
   PRE_LINK

@@ -805,12 +805,6 @@ void ST_VM_dispose(ST_Context context, ST_Code *code) {
     free(code->symbTab);
 }
 
-static void ST_VM_dofile(ST_Context context, const char *file) {
-    ST_Code code = ST_VM_load(context, file);
-    ST_VM_execute(context, &code, 0);
-    ST_VM_dispose(context, &code);
-}
-
 /*//////////////////////////////////////////////////////////////////////////////
 // GC
 /////////////////////////////////////////////////////////////////////////////*/
@@ -904,6 +898,40 @@ static void ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
                          cObject);
 }
 
+static ST_Object ST_ifTrueImplForTrue(ST_Context context, ST_Object self,
+                                      ST_Object argv[]) {
+    ST_Object valueSymbol = ST_Context_requestSymbol(context, "value");
+    return ST_Object_sendMessage(context, argv[0], valueSymbol, 0, NULL);
+}
+
+static ST_Object ST_ifFalseImplForFalse(ST_Context context, ST_Object self,
+                                        ST_Object argv[]) {
+    ST_Object valueSymbol = ST_Context_requestSymbol(context, "value");
+    return ST_Object_sendMessage(context, argv[0], valueSymbol, 0, NULL);
+}
+
+static ST_Object ST_nopMethod(ST_Context context, ST_Object self,
+                              ST_Object argv[]) {
+    return ST_Context_getNilValue(context);
+}
+
+static void ST_initNil(ST_Internal_Context *context) {
+    ST_SUBCLASS(context, "Object", "UndefinedObject");
+    context->nilValue = ST_NEW(context, "UndefinedObject");
+}
+
+static void ST_initBoolean(ST_Internal_Context *context) {
+    ST_SUBCLASS(context, "Object", "Boolean");
+    ST_SUBCLASS(context, "Boolean", "True");
+    ST_SUBCLASS(context, "Boolean", "False");
+    ST_SETMETHOD(context, "True", "ifTrue", ST_ifTrueImplForTrue, 1);
+    ST_SETMETHOD(context, "True", "ifFalse", ST_nopMethod, 1);
+    ST_SETMETHOD(context, "False", "ifFalse", ST_ifFalseImplForFalse, 1);
+    ST_SETMETHOD(context, "False", "ifTrue", ST_nopMethod, 1);
+    context->trueValue = ST_NEW(context, "True");
+    context->falseValue = ST_NEW(context, "False");
+}
+
 ST_Context ST_Context_create() {
     ST_Internal_Context *context = malloc(sizeof(ST_Internal_Context));
     if (UNEXPECTED(!context))
@@ -913,11 +941,8 @@ ST_Context ST_Context_create() {
     ST_SETMETHOD(context, "Object", "subclass", ST_subclass, 0);
     ST_SETMETHOD(context, "Object", "instanceVariableNames",
                  ST_defineInstanceVariables, 1);
-    ST_VM_dofile(context, "stdlib/nil.stbc");
-    context->nilValue = ST_NEW(context, "UndefinedObject");
-    ST_VM_dofile(context, "stdlib/boolean.stbc");
-    context->trueValue = ST_NEW(context, "True");
-    context->falseValue = ST_NEW(context, "False");
+    ST_initNil(context);
+    ST_initBoolean(context);
     ST_Internal_Context_initErrorHandling(context);
     return context;
 }

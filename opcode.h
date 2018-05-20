@@ -16,6 +16,7 @@ typedef enum ST_VM_Opcode {
     ST_VM_OP_SETIVAR,
     ST_VM_OP_DUP,
     ST_VM_OP_POP,
+    ST_VM_OP_SWAP,
 } ST_VM_Opcode;
 
 #endif // OPCODE_H
