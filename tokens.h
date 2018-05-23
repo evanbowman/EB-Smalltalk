@@ -15,6 +15,7 @@ typedef enum ST_Token {
     ST_TOK_TRUE,
     ST_TOK_FALSE,
     ST_TOK_IDENT,
+    ST_TOK_COUNT
 } ST_Token;
 
 #endif // TOKENS_H
