@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef size_t ST_Size;
 typedef void *ST_OpaqueStruct;
 typedef ST_OpaqueStruct ST_Context;
@@ -93,3 +97,7 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
         ST_requestSymbol(CONTEXT, MNAME), C_FUNC, ARGC)
 
 #endif /* SMALLTALK_H */
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
