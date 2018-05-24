@@ -2,7 +2,8 @@
 #ifndef SMALLTALK_H
 #define SMALLTALK_H
 
-#include <stdlib.h>
+#include <stddef.h>
+#include <stdint.h>
 
 typedef size_t ST_Size;
 typedef void *ST_OpaqueStruct;
@@ -26,8 +27,12 @@ void ST_Object_setInstanceVar(ST_Context context, ST_Object object,
                               ST_Size position, ST_Object value);
 
 typedef struct ST_Context_Configuration {
-    void *(*allocFn)(size_t);
-    void (*freeFn)(void *);
+    struct Memory {
+        void *(*allocFn)(size_t);
+        void (*freeFn)(void *);
+        void *(*copyFn)(void *, const void *, size_t);
+        void *(*setFn)(void *, int c, size_t n);
+    } memory;
 } ST_Context_Configuration;
 
 ST_Context ST_createContext(ST_Context_Configuration *config);
@@ -55,9 +60,9 @@ typedef struct ST_Code {
 
 void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
 
-ST_Code ST_VM_load(ST_Context context, const char *path);
-void ST_VM_store(ST_Context context, const char *path, ST_Code *code);
-void ST_VM_dispose(ST_Context context, ST_Code *code);
+/* ST_Code ST_VM_load(ST_Context context, const char *path); */
+/* void ST_VM_store(ST_Context context, const char *path, ST_Code *code); */
+/* void ST_VM_dispose(ST_Context context, ST_Code *code); */
 
 /* Shortcuts for some common stuff */
 

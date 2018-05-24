@@ -1,6 +1,3 @@
-#include <stdio.h>
-#include <string.h>
-
 #include "smalltalk.h"
 
 struct ST_Internal_Context;
@@ -12,8 +9,10 @@ static ST_Object ST_refStack(struct ST_Internal_Context *context,
 
 static ST_Size ST_stackSize(struct ST_Internal_Context *context);
 
-static void *ST_alloc(ST_Context context, size_t size);
+static void *ST_alloc(ST_Context context, ST_Size size);
 static void ST_free(ST_Context context, void *memory);
+static void ST_copy(ST_Context context, void *dst, const void *src,
+                    ST_Size bytes);
 
 /*//////////////////////////////////////////////////////////////////////////////
 // Helper functions
@@ -33,11 +32,36 @@ typedef enum ST_Cmp {
     ST_Cmp_Eq = 0
 } ST_Cmp;
 
+int ST_strcmp(char string1[], char string2[]) {
+    int i;
+    for (i = 0;; i++) {
+        if (string1[i] != string2[i]) {
+            return string1[i] < string2[i] ? -1 : 1;
+        }
+        if (string1[i] == '\0') {
+            return 0;
+        }
+    }
+}
+
+static ST_Size ST_strlen(const char *s) {
+    ST_Size len = 0;
+    while (*(s++))
+        ++len;
+    return len;
+}
+
+static void ST_strcpy(char *dst, const char *src) {
+    char c;
+    while ((c = *(src++)))
+        *(dst++) = c;
+}
+
 static char *ST_strdup(ST_Context context, const char *s) {
-    char *d = ST_alloc(context, strlen(s) + 1);
+    char *d = ST_alloc(context, ST_strlen(s) + 1);
     if (d == NULL)
         return NULL;
-    strcpy(d, s);
+    ST_strcpy(d, s);
     return d;
 }
 
@@ -232,9 +256,11 @@ ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
         if (found) {
             return &((ST_MethodMap_Entry *)found)->method;
         } else {
-            /* Note: the current dummy implementation of metaclasses works by having a class
-               hold a circular reference to itself, so we need to test self/super-equality
-               before walking up the meta-class hierarchy. */
+            /* Note: the current dummy implementation of metaclasses works by having a
+         class
+         hold a circular reference to itself, so we need to test
+         self/super-equality
+         before walking up the meta-class hierarchy. */
             if (currentClass->super != currentClass) {
                 currentClass = currentClass->super;
             } else {
@@ -304,7 +330,6 @@ void ST_Object_setMethod(ST_Context context, ST_Object object,
                          ST_Object selector, ST_ForeignMethod foreignMethod,
                          ST_Byte argc) {
     ST_MethodMap_Entry *entry = ST_alloc(context, sizeof(ST_MethodMap_Entry));
-    ST_BST_Node_init(&entry->header.node);
     entry->header.symbol = selector;
     entry->method.type = ST_METHOD_TYPE_FOREIGN;
     entry->method.payload.foreignMethod = foreignMethod;
@@ -341,8 +366,9 @@ typedef struct ST_Vector {
     ST_Size elemSize;
 } ST_Vector;
 
-static bool ST_Vector_init(ST_Vector *vec, ST_Size elemSize, ST_Size capacity) {
-    vec->begin = malloc(elemSize * capacity);
+static bool ST_Vector_init(ST_Context context, ST_Vector *vec, ST_Size elemSize,
+                           ST_Size capacity) {
+    vec->begin = ST_alloc(context, elemSize * capacity);
     if (UNEXPECTED(!vec->begin))
         return false;
     vec->capacity = capacity;
@@ -355,19 +381,19 @@ static ST_Size ST_Vector_len(ST_Vector *vec) {
     return (vec->end - vec->begin) / vec->elemSize;
 }
 
-static bool ST_Vector_push(ST_Vector *vec, const void *element) {
+static bool ST_Vector_push(ST_Context context, ST_Vector *vec,
+                           const void *element) {
     const ST_Size len = ST_Vector_len(vec);
     if (UNEXPECTED(len == vec->capacity)) {
-        if (vec->capacity)
-            vec->capacity = vec->capacity * 2;
-        else
-            vec->capacity = vec->elemSize;
-        vec->begin = realloc(vec->begin, vec->capacity);
-        if (!vec->begin)
-            return false;
+        void *newBuffer;
+        vec->capacity = vec->capacity * 2;
+        newBuffer = ST_alloc(context, vec->capacity * vec->elemSize);
+        ST_copy(context, newBuffer, vec->begin, len * vec->elemSize);
+        ST_free(context, vec->begin);
+        vec->begin = newBuffer;
         vec->end = vec->begin + len;
     }
-    memcpy(vec->end, element, vec->elemSize);
+    ST_copy(context, vec->end, element, vec->elemSize);
     vec->end += vec->elemSize;
     return true;
 }
@@ -378,8 +404,9 @@ static void *ST_Vector_get(ST_Vector *vec, ST_Size index) {
     return vec->begin + index * vec->elemSize;
 }
 
-__attribute__((unused)) static void ST_Vector_free(ST_Vector *vec) {
-    free(vec->begin);
+__attribute__((unused)) static void ST_Vector_free(ST_Context context,
+                                                   ST_Vector *vec) {
+    ST_free(context, vec->begin);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -389,13 +416,14 @@ __attribute__((unused)) static void ST_Vector_free(ST_Vector *vec) {
 typedef struct ST_Pool_Node {
     struct ST_Pool_Node *next;
     /* Technically the allocated memory lives in-place here in the node, but
-       because this is ansi c, we don't have flexible structs yet, so you have
-       to use your imagination */
+     because this is ansi c, we don't have flexible structs yet, so you have
+     to use your imagination */
 } ST_Pool_Node;
 
 typedef struct ST_Pool {
     ST_Size elemSize;
     ST_Pool_Node *freelist;
+    ST_Size lastAllocCount;
     /* TODO: store slabs so we can free them */
 } ST_Pool;
 
@@ -404,6 +432,7 @@ void ST_Pool_grow(ST_Context context, ST_Pool *pool, ST_Size count) {
     const ST_Size allocSize = poolNodeSize * count;
     ST_Byte *mem = ST_alloc(context, allocSize);
     ST_Size i;
+    pool->lastAllocCount = count;
     for (i = 0; i < allocSize; i += poolNodeSize) {
         ST_Pool_Node *node = (void *)(mem + i);
         node->next = pool->freelist;
@@ -421,13 +450,13 @@ void ST_Pool_init(ST_Context context, ST_Pool *pool, ST_Size elemSize,
 void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
     ST_Pool_Node *ret;
     if (!pool->freelist) {
-        ST_Pool_grow(context, pool, /* FIXME: come up with heuristic */ 500);
+        ST_Pool_grow(context, pool, pool->lastAllocCount * 2);
     }
     ret = pool->freelist;
     pool->freelist = pool->freelist->next;
     /* Note: advancing the node pointer by the size of the node effectively
-       strips the header, thus setting the pointer to the contained element.
-       see comment in ST_Pool_Node. */
+     strips the header, thus setting the pointer to the contained element.
+     see comment in ST_Pool_Node. */
     return (ST_Byte *)ret + sizeof(ST_Pool_Node);
 }
 
@@ -447,8 +476,8 @@ typedef struct ST_Internal_Context {
     ST_Pool gvarNodePool;
 } ST_Internal_Context;
 
-static void *ST_alloc(ST_Context context, size_t size) {
-    void *mem = ((ST_Internal_Context *)context)->config.allocFn(size);
+static void *ST_alloc(ST_Context context, ST_Size size) {
+    void *mem = ((ST_Internal_Context *)context)->config.memory.allocFn(size);
     if (UNEXPECTED(!mem)) {
         /* TODO... */
     }
@@ -456,7 +485,12 @@ static void *ST_alloc(ST_Context context, size_t size) {
 }
 
 static void ST_free(ST_Context context, void *memory) {
-    ((ST_Internal_Context *)context)->config.freeFn(memory);
+    ((ST_Internal_Context *)context)->config.memory.freeFn(memory);
+}
+
+static void ST_copy(ST_Context context, void *dst, const void *src,
+                    ST_Size bytes) {
+    ((ST_Internal_Context *)context)->config.memory.copyFn(dst, src, bytes);
 }
 
 typedef struct ST_StringMap_Entry {
@@ -468,7 +502,7 @@ typedef struct ST_StringMap_Entry {
 static ST_Cmp ST_StringMap_comparator(void *left, void *right) {
     ST_StringMap_Entry *lhsEntry = left;
     ST_StringMap_Entry *rhsEntry = right;
-    return ST_clamp(strcmp(lhsEntry->key, rhsEntry->key), ST_Cmp_Less,
+    return ST_clamp(ST_strcmp(lhsEntry->key, rhsEntry->key), ST_Cmp_Less,
                     ST_Cmp_Greater);
 }
 
@@ -478,7 +512,7 @@ typedef struct ST_GlobalVarMap_Entry {
 } ST_GlobalVarMap_Entry;
 
 static void ST_pushStack(ST_Internal_Context *context, ST_Object val) {
-    ST_Vector_push(&context->operandStack, &val);
+    ST_Vector_push(context, &context->operandStack, &val);
 }
 
 static void ST_popStack(struct ST_Internal_Context *context) {
@@ -507,8 +541,8 @@ ST_Object ST_getGlobal(ST_Context context, ST_Object symbol) {
     searchTmpl.symbol = symbol;
     found = ST_BST_find(globalScope, &searchTmpl, ST_SymbolMap_comparator);
     if (UNEXPECTED(!found)) {
-        printf("warning: global variable \"%s\" not found\n",
-               ST_Symbol_toString(context, symbol));
+        /* printf("warning: global variable \"%s\" not found\n", */
+        /*        ST_Symbol_toString(context, symbol)); */
         return ST_getNilValue(context);
     }
     ST_BST_splay(globalScope, &symbol, ST_SymbolMap_comparator);
@@ -518,7 +552,7 @@ ST_Object ST_getGlobal(ST_Context context, ST_Object symbol) {
 void ST_setGlobal(ST_Context context, ST_Object symbol, ST_Object object) {
     ST_Internal_Context *ctx = context;
     ST_GlobalVarMap_Entry *entry = ST_Pool_alloc(ctx, &ctx->gvarNodePool);
-    ST_BST_Node_init(&entry->header.node);
+    ST_BST_Node_init((ST_BST_Node *)entry);
     entry->header.symbol = symbol;
     entry->value = object;
     if (!ST_BST_insert((ST_BST_Node **)&ctx->globalScope, &entry->header.node,
@@ -551,7 +585,7 @@ ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
         return (ST_Object)((ST_StringMap_Entry *)found)->value;
     }
     newEntry = ST_alloc(context, sizeof(ST_StringMap_Entry));
-    ST_BST_Node_init(&newEntry->nodeHeader);
+    ST_BST_Node_init((ST_BST_Node *)newEntry);
     newEntry->key = ST_strdup(context, symbolName);
     newEntry->value = ST_NEW(context, "Symbol");
     if (!ST_BST_insert((ST_BST_Node **)&extCtx->symbolRegistry,
@@ -705,8 +739,8 @@ static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
             const ST_Byte argc = frame->code->instructions[frame->ip + 3];
             ST_MethodMap_Entry *entry =
                 ST_alloc(context, sizeof(ST_MethodMap_Entry));
+            ST_BST_Node_init((ST_BST_Node *)entry);
             frame->ip += 3;
-            ST_BST_Node_init(&entry->header.node);
             entry->header.symbol = selector;
             entry->method.type = ST_METHOD_TYPE_COMPILED;
             entry->method.argc = argc;
@@ -734,16 +768,6 @@ static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
             ST_free(context, completeFrame);
         } break;
 
-        case ST_VM_OP_GETIVAR: {
-            puts("TODO: getivar");
-            exit(EXIT_FAILURE);
-        } break;
-
-        case ST_VM_OP_SETIVAR: {
-            puts("TODO: setivar");
-            exit(EXIT_FAILURE);
-        } break;
-
         case ST_VM_OP_DUP: {
             ST_Object top = ST_refStack(context, 0);
             ST_pushStack(context, top);
@@ -757,9 +781,7 @@ static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
         }
 
         default:
-            printf("evaluation failure: invalid bytecode: %d\n",
-                   frame->code->instructions[frame->ip]);
-            exit(EXIT_FAILURE);
+            return; /* FIXME */
         }
     }
 }
@@ -773,60 +795,61 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset) {
     ST_Internal_VM_execute(context, &rootFrame);
 }
 
-void ST_VM_store(ST_Context context, const char *path, ST_Code *code) {
-    FILE *out = fopen(path, "w");
-    ST_Size i;
-    for (i = 0; i < code->symbTabSize; ++i) {
-        const char *symbolStr = ST_Symbol_toString(context, code->symbTab[i]);
-        fputs(symbolStr, out);
-        fputc('\n', out);
-    }
-    fputs("\n", out);
-    fwrite(code->instructions, 1, code->length, out);
-    fclose(out);
-}
+/* void ST_VM_store(ST_Context context, const char *path, ST_Code *code) { */
+/*     FILE *out = fopen(path, "w"); */
+/*     ST_Size i; */
+/*     for (i = 0; i < code->symbTabSize; ++i) { */
+/*         const char *symbolStr = ST_Symbol_toString(context,
+ * code->symbTab[i]); */
+/*         fputs(symbolStr, out); */
+/*         fputc('\n', out); */
+/*     } */
+/*     fputs("\n", out); */
+/*     fwrite(code->instructions, 1, code->length, out); */
+/*     fclose(out); */
+/* } */
 
-ST_Code ST_VM_load(ST_Context context, const char *path) {
-    FILE *in = fopen(path, "r");
-    ST_Code code;
-    char *line = NULL;
-    size_t len = 0;
-    ssize_t read = 0;
-    ST_Size numSymbols = 0;
-    size_t symbolTableEndPos;
-    size_t fileEndPos;
-    ST_Size i;
-    if (in == NULL) {
-        printf("bytecode file \"%s\" does not exist!\n", path);
-        exit(EXIT_FAILURE);
-    }
-    while ((read = getline(&line, &len, in)) != -1) {
-        if (!strcmp(line, "\n")) {
-            break; /* Reached symbol table delimiter */
-        }
-        ++numSymbols;
-    }
-    fseek(in, 0, SEEK_SET);
-    code.symbTab = ST_alloc(context, numSymbols * sizeof(ST_Object));
-    code.symbTabSize = numSymbols;
-    for (i = 0; i < numSymbols; ++i) {
-        getline(&line, &len, in);
-        line[strlen(line) - 1] = '\0';
-        code.symbTab[i] = ST_requestSymbol(context, line);
-    }
-    getline(&line, &len, in); /* Skip symbol table delimiter */
-    symbolTableEndPos = ftell(in);
-    fseek(in, 0, SEEK_END);
-    fileEndPos = ftell(in);
-    fseek(in, symbolTableEndPos, SEEK_SET);
-    code.length = fileEndPos - symbolTableEndPos;
-    code.instructions = malloc(code.length);
-    fgets((char *)code.instructions, code.length, in);
-    fclose(in);
-    if (line)
-        free(line);
-    return code;
-}
+/* ST_Code ST_VM_load(ST_Context context, const char *path) { */
+/*     FILE *in = fopen(path, "r"); */
+/*     ST_Code code; */
+/*     char *line = NULL; */
+/*     size_t len = 0; */
+/*     ssize_t read = 0; */
+/*     ST_Size numSymbols = 0; */
+/*     size_t symbolTableEndPos; */
+/*     size_t fileEndPos; */
+/*     ST_Size i; */
+/*     if (in == NULL) { */
+/*         printf("bytecode file \"%s\" does not exist!\n", path); */
+/*         exit(EXIT_FAILURE); */
+/*     } */
+/*     while ((read = getline(&line, &len, in)) != -1) { */
+/*         if (!strcmp(line, "\n")) { */
+/*             break; /\* Reached symbol table delimiter *\/ */
+/*         } */
+/*         ++numSymbols; */
+/*     } */
+/*     fseek(in, 0, SEEK_SET); */
+/*     code.symbTab = ST_alloc(context, numSymbols * sizeof(ST_Object)); */
+/*     code.symbTabSize = numSymbols; */
+/*     for (i = 0; i < numSymbols; ++i) { */
+/*         getline(&line, &len, in); */
+/*         line[strlen(line) - 1] = '\0'; */
+/*         code.symbTab[i] = ST_requestSymbol(context, line); */
+/*     } */
+/*     getline(&line, &len, in); /\* Skip symbol table delimiter *\/ */
+/*     symbolTableEndPos = ftell(in); */
+/*     fseek(in, 0, SEEK_END); */
+/*     fileEndPos = ftell(in); */
+/*     fseek(in, symbolTableEndPos, SEEK_SET); */
+/*     code.length = fileEndPos - symbolTableEndPos; */
+/*     code.instructions = malloc(code.length); */
+/*     fgets((char *)code.instructions, code.length, in); */
+/*     fclose(in); */
+/*     if (line) */
+/*         free(line); */
+/*     return code; */
+/* } */
 
 void ST_VM_dispose(ST_Context context, ST_Code *code) {
     ST_free(context, code->instructions);
@@ -848,7 +871,8 @@ static ST_Object ST_allocateObject(ST_Context context, ST_Object self,
     ST_Internal_Context *ctx = context;
     ST_Internal_Object *obj = ST_Pool_alloc(context, &ctx->objectPool);
     obj->methodTree = NULL;
-    /* Note: because the receiver of a 'new' message will always be a class (or metaclass) */
+    /* Note: because the receiver of a 'new' message will always be a class (or
+   * metaclass) */
     /* But, still, TODO: implement real metaclasses. */
     obj->class = ((ST_Internal_Object *)self)->class;
     obj->super = obj->class->super;
@@ -869,16 +893,11 @@ static ST_Object ST_subclass(ST_Context context, ST_Object self,
 
 static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
                                       ST_Object argv[]) {
-    puts("TODO: message not understood...");
     return ST_getNilValue(context);
 }
 
 static ST_Object ST_defineInstanceVariables(ST_Context context, ST_Object self,
                                             ST_Object argv[]) {
-    /* FIXME */ exit(1);
-    if (((ST_Internal_Object *)self)->instanceVariables) {
-        /* FIXME */ exit(1);
-    }
     return ST_getNilValue(context);
 }
 
@@ -890,28 +909,36 @@ ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "Message");
 }
 
-static void ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
+static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     /* We need to do things manually for a bit, until we've defined the
-       symbol class and the new method, because most of the functions in
-       the runtime depend on Symbol. */
-    ST_Internal_Object *cObject = calloc(1, sizeof(ST_Internal_Object));
-    ST_Internal_Object *cSymbol = calloc(1, sizeof(ST_Internal_Object));
-    ST_Internal_Object *symbolSymbol = calloc(1, sizeof(ST_Internal_Object));
-    ST_Internal_Object *newSymbol = calloc(1, sizeof(ST_Internal_Object));
-    ST_StringMap_Entry *newEntry = calloc(1, sizeof(ST_StringMap_Entry));
-    if (!cObject || !cSymbol || !symbolSymbol || !newSymbol || !newEntry) {
-        exit(1); /* FIXME */
-    }
+     symbol class and the new method, because most of the functions in
+     the runtime depend on Symbol. */
+    ST_Internal_Object *cObject = ST_alloc(context, sizeof(ST_Internal_Object));
+    ST_Internal_Object *cSymbol = ST_alloc(context, sizeof(ST_Internal_Object));
+    ST_Internal_Object *symbolSymbol =
+        ST_alloc(context, sizeof(ST_Internal_Object));
+    ST_Internal_Object *newSymbol =
+        ST_alloc(context, sizeof(ST_Internal_Object));
+    ST_StringMap_Entry *newEntry =
+        ST_alloc(context, sizeof(ST_StringMap_Entry));
     cObject->class = cObject;
     cObject->super = cObject;
+    cObject->methodTree = NULL;
     cSymbol->super = cObject;
     cSymbol->class = cSymbol;
+    cSymbol->methodTree = NULL;
+    symbolSymbol->super = NULL;
     symbolSymbol->class = cSymbol;
+    symbolSymbol->methodTree = NULL;
+    newSymbol->super = NULL;
     newSymbol->class = cSymbol;
-    context->symbolRegistry = calloc(1, sizeof(ST_StringMap_Entry));
+    newSymbol->methodTree = NULL;
+    context->symbolRegistry = ST_alloc(context, sizeof(ST_StringMap_Entry));
+    ST_BST_Node_init((ST_BST_Node *)context->symbolRegistry);
     context->symbolRegistry->key = ST_strdup(context, "Symbol");
     context->symbolRegistry->value = symbolSymbol;
-    context->globalScope = calloc(1, sizeof(ST_GlobalVarMap_Entry));
+    context->globalScope = ST_alloc(context, sizeof(ST_GlobalVarMap_Entry));
+    ST_BST_Node_init((ST_BST_Node *)context->globalScope);
     context->globalScope->header.symbol = symbolSymbol;
     context->globalScope->value = cSymbol;
     newEntry->key = ST_strdup(context, "new");
@@ -920,6 +947,7 @@ static void ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
                   &newEntry->nodeHeader, ST_StringMap_comparator);
     ST_Object_setMethod(context, cObject, newSymbol, ST_allocateObject, 0);
     ST_setGlobal(context, ST_requestSymbol(context, "Object"), cObject);
+    return true;
 }
 
 static ST_Object ST_ifTrueImplForTrue(ST_Context context, ST_Object self,
@@ -957,7 +985,8 @@ static void ST_initBoolean(ST_Internal_Context *context) {
 }
 
 ST_Context ST_createContext(ST_Context_Configuration *config) {
-    ST_Internal_Context *context = malloc(sizeof(ST_Internal_Context));
+    ST_Internal_Context *context =
+        config->memory.allocFn(sizeof(ST_Internal_Context));
     if (!context)
         return NULL;
     context->config = *config;
@@ -966,7 +995,8 @@ ST_Context ST_createContext(ST_Context_Configuration *config) {
     ST_Pool_init(context, &context->gvarNodePool, sizeof(ST_GlobalVarMap_Entry),
                  1000);
     ST_Internal_Context_bootstrap(context);
-    ST_Vector_init(&context->operandStack, sizeof(ST_Internal_Object *), 1024);
+    ST_Vector_init(context, &context->operandStack,
+                   sizeof(ST_Internal_Object *), 1024);
     ST_SETMETHOD(context, "Object", "subclass", ST_subclass, 0);
     ST_SETMETHOD(context, "Object", "instanceVariableNames",
                  ST_defineInstanceVariables, 1);
