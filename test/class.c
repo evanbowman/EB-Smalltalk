@@ -12,11 +12,15 @@ int main() {
     ST_Object newSymb = ST_requestSymbol(context, "new");
 
     ST_Object objClass = ST_getGlobal(context, objSymb);
-    ST_Object widjetClass = ST_Object_sendMessage(context, objClass, subcSymb, 0, NULL);
-    ST_Object widjetInst = ST_Object_sendMessage(context, widjetClass, newSymb, 0, NULL);
+    ST_Object widjetClass =
+        ST_Object_sendMessage(context, objClass, subcSymb, 0, NULL);
+    ST_Object widjetInst =
+        ST_Object_sendMessage(context, widjetClass, newSymb, 0, NULL);
 
-    ST_Object widjetSuper = ST_Object_sendMessage(context, widjetInst, superSymb, 0, NULL);
-    ST_Object widjetsClass = ST_Object_sendMessage(context, widjetInst, classSymb, 0, NULL);
+    ST_Object widjetSuper =
+        ST_Object_sendMessage(context, widjetInst, superSymb, 0, NULL);
+    ST_Object widjetsClass =
+        ST_Object_sendMessage(context, widjetInst, classSymb, 0, NULL);
 
     if (widjetSuper != objClass) {
         return EXIT_FAILURE;
