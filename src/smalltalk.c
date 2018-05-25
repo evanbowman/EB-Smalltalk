@@ -258,6 +258,12 @@ void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
     return (ST_Byte *)ret + sizeof(ST_Pool_Node);
 }
 
+void ST_Pool_free(ST_Context context, ST_Pool *pool, void *mem) {
+    ST_Pool_Node *node = (void *)((char *)mem - sizeof(ST_Pool_Node));
+    node->next = pool->freelist;
+    pool->freelist = node;
+}
+
 /*//////////////////////////////////////////////////////////////////////////////
 // Method
 /////////////////////////////////////////////////////////////////////////////*/
@@ -294,8 +300,12 @@ typedef struct ST_Internal_Object {
        struct ST_Internal_Object *InstanceVariables[] */
 } ST_Internal_Object;
 
+ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
+    return (void *)((ST_Byte *)object + sizeof(ST_Internal_Object));
+}
+
 typedef struct ST_Class {
-    ST_Internal_Object asObject;
+    ST_Internal_Object object;
     ST_MethodMap_Entry *methodTree;
     struct ST_Class *super;
     ST_Size instanceVariableCount;
@@ -465,6 +475,7 @@ typedef struct ST_Internal_Context {
     ST_Internal_Object *falseValue;
     ST_Vector operandStack;
     ST_Pool gvarNodePool;
+    ST_Pool vmFramePool;
 } ST_Internal_Context;
 
 static void *ST_alloc(ST_Context context, ST_Size size) {
@@ -673,7 +684,8 @@ static ST_LE16 ST_readLE32(const ST_VM_Frame *f, ST_Size offset) {
            ((ST_LE16) * (base + 2) << 16) | ((ST_LE16) * (base + 3) << 24);
 }
 
-static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
+static void ST_Internal_VM_execute(ST_Internal_Context *context,
+                                   ST_VM_Frame *frame) {
     while (frame->ip < frame->code->length) {
         switch (frame->code->instructions[frame->ip]) {
         case ST_VM_OP_GETGLOBAL: {
@@ -726,7 +738,7 @@ static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
 
                 case ST_METHOD_TYPE_COMPILED: {
                     ST_VM_Frame *newFrame =
-                        ST_alloc(context, sizeof(ST_VM_Frame));
+                        ST_Pool_alloc(context, &context->vmFramePool);
                     newFrame->ip = method->payload.compiledMethod.offset;
                     newFrame->code = method->payload.compiledMethod.source;
                     newFrame->bp = ST_stackSize(context);
@@ -774,7 +786,7 @@ static void ST_Internal_VM_execute(ST_Context context, ST_VM_Frame *frame) {
             }
             ST_pushStack(context, ret);
             frame = frame->parent;
-            ST_free(context, completeFrame);
+            ST_Pool_free(context, &context->vmFramePool, completeFrame);
         } break;
 
         case ST_VM_OP_DUP: {
@@ -814,10 +826,14 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset) {
 // Language types and methods
 /////////////////////////////////////////////////////////////////////////////*/
 
-static ST_Object ST_makeInstance(ST_Context context, ST_Object self,
-                                 ST_Object argv[]) {
+static ST_Object ST_new(ST_Context context, ST_Object self, ST_Object argv[]) {
     ST_Class *class = self;
     ST_Internal_Object *instance = ST_Pool_alloc(context, &class->instancePool);
+    ST_Internal_Object **ivars = ST_Object_getIVars(instance);
+    ST_Size i;
+    for (i = 0; i < class->instanceVariableCount; ++i) {
+        ivars[i] = ST_getNilValue(context);
+    }
     instance->class = class;
     return instance;
 }
@@ -827,7 +843,7 @@ static ST_Object ST_makeInstance(ST_Context context, ST_Object self,
 static ST_Object ST_subclass(ST_Context context, ST_Object self,
                              ST_Object argv[]) {
     ST_Class *sub = ST_alloc(context, sizeof(ST_Class));
-    sub->asObject.class = sub;
+    sub->object.class = sub;
     sub->super = self; /* Note: receiver is a class */
     sub->instanceVariableCount = ((ST_Class *)self)->instanceVariableCount;
     sub->methodTree = NULL;
@@ -873,13 +889,13 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
         ST_alloc(context, sizeof(ST_Internal_Object));
     ST_StringMap_Entry *newEntry =
         ST_alloc(context, sizeof(ST_StringMap_Entry));
-    cObject->asObject.class = cObject;
+    cObject->object.class = cObject;
     cObject->super = cObject;
     cObject->methodTree = NULL;
     cObject->instanceVariableCount = 0;
     ST_Pool_init(context, &cObject->instancePool, sizeof(ST_Object), 100);
     cSymbol->super = cObject;
-    cSymbol->asObject.class = cSymbol;
+    cSymbol->object.class = cSymbol;
     cSymbol->methodTree = NULL;
     cSymbol->instanceVariableCount = 0;
     ST_Pool_init(context, &cSymbol->instancePool, sizeof(ST_Object), 512);
@@ -897,7 +913,7 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     newEntry->value = newSymbol;
     ST_BST_insert((ST_BST_Node **)&context->symbolRegistry,
                   &newEntry->nodeHeader, ST_StringMap_comparator);
-    ST_Object_setMethod(context, cObject, newSymbol, ST_makeInstance, 0);
+    ST_Object_setMethod(context, cObject, newSymbol, ST_new, 0);
     ST_setGlobal(context, ST_requestSymbol(context, "Object"), cObject);
     return true;
 }
@@ -944,6 +960,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     context->config = *config;
     ST_Pool_init(context, &context->gvarNodePool, sizeof(ST_GlobalVarMap_Entry),
                  1000);
+    ST_Pool_init(context, &context->vmFramePool, sizeof(ST_VM_Frame), 50);
     ST_Internal_Context_bootstrap(context);
     ST_Vector_init(context, &context->operandStack,
                    sizeof(ST_Internal_Object *), 1024);
