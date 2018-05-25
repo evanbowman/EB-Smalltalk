@@ -18,8 +18,10 @@ function(unit_test name)
 endfunction()
 
 unit_test(symbol)
+unit_test(class)
 
 add_custom_command(TARGET smalltalk
   PRE_LINK
   COMMAND clang-format --style=file -i
-  ${PROJECT_SOURCE_DIR}*.c ${PROJECT_SOURCE_DIR}*.h)
+  ${PROJECT_SOURCE_DIR}*.c ${PROJECT_SOURCE_DIR}*.h
+  ${PROJECT_TEST_DIR}*.c)

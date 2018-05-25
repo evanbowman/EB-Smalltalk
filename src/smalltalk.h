@@ -39,7 +39,7 @@ typedef struct ST_Context_Configuration {
     } memory;
 } ST_Context_Configuration;
 
-ST_Context ST_createContext(ST_Context_Configuration *config);
+ST_Context ST_createContext(const ST_Context_Configuration *config);
 
 ST_Object ST_requestSymbol(ST_Context context, const char *symbolName);
 

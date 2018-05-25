@@ -907,13 +907,18 @@ static ST_Object ST_subclass(ST_Context context, ST_Object self,
     return sub;
 }
 
-static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
-                                      ST_Object argv[]) {
-    return ST_getNilValue(context);
+static ST_Object ST_superclass(ST_Context context, ST_Object self,
+                               ST_Object argv[]) {
+    return ((ST_Internal_Object *)self)->super;
 }
 
-static ST_Object ST_defineInstanceVariables(ST_Context context, ST_Object self,
-                                            ST_Object argv[]) {
+static ST_Object ST_class(ST_Context context, ST_Object self,
+                          ST_Object argv[]) {
+    return ((ST_Internal_Object *)self)->class;
+}
+
+static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
+                                      ST_Object argv[]) {
     return ST_getNilValue(context);
 }
 
@@ -1000,7 +1005,7 @@ static void ST_initBoolean(ST_Internal_Context *context) {
     context->falseValue = ST_NEW(context, "False");
 }
 
-ST_Context ST_createContext(ST_Context_Configuration *config) {
+ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_Internal_Context *context =
         config->memory.allocFn(sizeof(ST_Internal_Context));
     if (!context)
@@ -1014,8 +1019,8 @@ ST_Context ST_createContext(ST_Context_Configuration *config) {
     ST_Vector_init(context, &context->operandStack,
                    sizeof(ST_Internal_Object *), 1024);
     ST_SETMETHOD(context, "Object", "subclass", ST_subclass, 0);
-    ST_SETMETHOD(context, "Object", "instanceVariableNames",
-                 ST_defineInstanceVariables, 1);
+    ST_SETMETHOD(context, "Object", "superclass", ST_superclass, 0);
+    ST_SETMETHOD(context, "Object", "class", ST_class, 0);
     ST_initNil(context);
     ST_initBoolean(context);
     ST_Internal_Context_initErrorHandling(context);
