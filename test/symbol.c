@@ -10,5 +10,5 @@ int main() {
     if (strcmp(ST_Symbol_toString(context, testSymb), testSymbStr) != 0) {
         return EXIT_FAILURE;
     }
-    return EXIT_FAILURE;
+    return EXIT_SUCCESS;
 }
