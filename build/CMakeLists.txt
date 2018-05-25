@@ -12,6 +12,9 @@ add_library(smalltalk ${PROJECT_SOURCE_DIR}smalltalk.c)
 function(unit_test name)
   add_executable("test-${name}" "${PROJECT_TEST_DIR}${name}.c")
   target_link_libraries("test-${name}" smalltalk)
+  add_custom_command(TARGET "test-${name}"
+    POST_BUILD
+    COMMAND "./test-${name}")
 endfunction()
 
 unit_test(symbol)
