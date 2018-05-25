@@ -464,7 +464,6 @@ typedef struct ST_Internal_Context {
     ST_Internal_Object *trueValue;
     ST_Internal_Object *falseValue;
     ST_Vector operandStack;
-    ST_Pool objectPool;
     ST_Pool gvarNodePool;
 } ST_Internal_Context;
 
@@ -943,8 +942,6 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     if (!context)
         return NULL;
     context->config = *config;
-    ST_Pool_init(context, &context->objectPool, sizeof(ST_Internal_Object),
-                 1000);
     ST_Pool_init(context, &context->gvarNodePool, sizeof(ST_GlobalVarMap_Entry),
                  1000);
     ST_Internal_Context_bootstrap(context);
