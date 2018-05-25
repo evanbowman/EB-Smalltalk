@@ -629,7 +629,23 @@ const char *ST_Symbol_toString(ST_Context context, ST_Object symbol) {
 // VM
 /////////////////////////////////////////////////////////////////////////////*/
 
-#include "opcode.h"
+typedef enum ST_VM_Opcode {
+    ST_VM_OP_GETGLOBAL,
+    ST_VM_OP_SETGLOBAL,
+    ST_VM_OP_PUSHNIL,
+    ST_VM_OP_PUSHTRUE,
+    ST_VM_OP_PUSHFALSE,
+    ST_VM_OP_PUSHSYMBOL,
+    ST_VM_OP_SENDMESSAGE,
+    ST_VM_OP_SETMETHOD,
+    ST_VM_OP_RETURN,
+    ST_VM_OP_GETIVAR,
+    ST_VM_OP_SETIVAR,
+    ST_VM_OP_DUP,
+    ST_VM_OP_POP,
+    ST_VM_OP_SWAP,
+    ST_VM_OP_COUNT
+} ST_VM_Opcode;
 
 static void ST_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
                                            ST_Object receiver,
