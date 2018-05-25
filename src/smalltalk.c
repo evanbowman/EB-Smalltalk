@@ -228,7 +228,7 @@ typedef struct ST_Pool {
 void ST_Pool_grow(ST_Context context, ST_Pool *pool, ST_Size count) {
     const ST_Size poolNodeSize = pool->elemSize + sizeof(ST_Pool_Node);
     const ST_Size allocSize = poolNodeSize * count;
-    ST_Byte *mem = ST_alloc(context, allocSize);
+    ST_U8 *mem = ST_alloc(context, allocSize);
     ST_Size i;
     pool->lastAllocCount = count;
     for (i = 0; i < allocSize; i += poolNodeSize) {
@@ -255,7 +255,7 @@ void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
     /* Note: advancing the node pointer by the size of the node effectively
      strips the header, thus setting the pointer to the contained element.
      see comment in ST_Pool_Node. */
-    return (ST_Byte *)ret + sizeof(ST_Pool_Node);
+    return (ST_U8 *)ret + sizeof(ST_Pool_Node);
 }
 
 void ST_Pool_free(ST_Context context, ST_Pool *pool, void *mem) {
@@ -280,7 +280,7 @@ typedef struct ST_Internal_Method {
         ST_ForeignMethod foreignMethod;
         ST_CompiledMethod compiledMethod;
     } payload;
-    ST_Byte argc;
+    ST_U8 argc;
 } ST_Internal_Method;
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -301,14 +301,14 @@ typedef struct ST_Internal_Object {
 } ST_Internal_Object;
 
 ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
-    return (void *)((ST_Byte *)object + sizeof(ST_Internal_Object));
+    return (void *)((ST_U8 *)object + sizeof(ST_Internal_Object));
 }
 
 typedef struct ST_Class {
     ST_Internal_Object object;
     ST_MethodMap_Entry *methodTree;
     struct ST_Class *super;
-    ST_Size instanceVariableCount;
+    ST_U16 instanceVariableCount;
     ST_Pool instancePool;
 } ST_Class;
 
@@ -316,7 +316,7 @@ static bool ST_isClass(ST_Internal_Object *object) {
     return (ST_Class *)object == object->class;
 }
 
-static bool ST_Object_hasIVar(ST_Object object, ST_Size position) {
+static bool ST_Object_hasIVar(ST_Object object, ST_U16 position) {
     if (ST_isClass(object)) {
         return false;
     }
@@ -328,13 +328,13 @@ static bool ST_Object_hasIVar(ST_Object object, ST_Size position) {
 }
 
 ST_Object ST_Object_getIVar(ST_Context context, ST_Object object,
-                            ST_Size position) {
+                            ST_U16 position) {
     if (!ST_Object_hasIVar(object, position))
         return ST_getNilValue(context);
     return ST_Object_getIVars(object)[position];
 }
 
-void ST_Object_setIVar(ST_Context context, ST_Object object, ST_Size position,
+void ST_Object_setIVar(ST_Context context, ST_Object object, ST_U16 position,
                        ST_Object value) {
     if (!ST_Object_hasIVar(object, position))
         return;
@@ -377,7 +377,7 @@ static void ST_failedMethodLookup(ST_Context context, ST_Object receiver,
 }
 
 ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
-                                ST_Object selector, ST_Byte argc,
+                                ST_Object selector, ST_U8 argc,
                                 ST_Object argv[]) {
     ST_Internal_Method *method =
         ST_Internal_Object_getMethod(context, receiver, selector);
@@ -391,7 +391,7 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
             return method->payload.foreignMethod(context, receiver, argv);
 
         case ST_METHOD_TYPE_COMPILED: {
-            ST_Byte i;
+            ST_U8 i;
             ST_Object result;
             for (i = 0; i < argc; ++i) {
                 ST_pushStack(context, argv[i]);
@@ -425,7 +425,7 @@ static bool ST_Class_insertMethodEntry(ST_Context context, ST_Class *class,
 /* FIXME.. rename to ST_Class_setMethod? Or just ST_setMethod? */
 void ST_Object_setMethod(ST_Context context, ST_Object object,
                          ST_Object selector, ST_ForeignMethod foreignMethod,
-                         ST_Byte argc) {
+                         ST_U8 argc) {
     ST_MethodMap_Entry *entry = ST_alloc(context, sizeof(ST_MethodMap_Entry));
     entry->header.symbol = selector;
     entry->method.type = ST_METHOD_TYPE_FOREIGN;
@@ -682,7 +682,7 @@ static void ST_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
                                            ST_Object receiver,
                                            ST_Internal_Method *method) {
     ST_Object *argv = ST_alloc(context, sizeof(ST_Object) * method->argc);
-    ST_Byte i;
+    ST_U8 i;
     for (i = 0; i < method->argc; ++i) {
         argv[i] = ST_refStack(context, 0);
         ST_popStack(context);
@@ -692,9 +692,6 @@ static void ST_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
     ST_free(context, argv);
 }
 
-typedef uint16_t ST_LE16;
-typedef uint32_t ST_LE32;
-
 typedef struct ST_VM_Frame {
     ST_Size ip;
     ST_Size bp;
@@ -702,16 +699,18 @@ typedef struct ST_VM_Frame {
     struct ST_VM_Frame *parent;
 } ST_VM_Frame;
 
-static ST_LE16 ST_readLE16(const ST_VM_Frame *f, ST_Size offset) {
-    const ST_Byte *base = f->code->instructions + f->ip + offset;
-    return ((ST_LE16)*base) | ((ST_LE16) * (base + 1) << 8);
+static ST_U16 ST_readLE16(const ST_VM_Frame *f, ST_Size offset) {
+    const ST_U8 *base = f->code->instructions + f->ip + offset;
+    return ((ST_U16)*base) | ((ST_U16) * (base + 1) << 8);
 }
 
-static ST_LE16 ST_readLE32(const ST_VM_Frame *f, ST_Size offset) {
-    const ST_Byte *base = f->code->instructions + f->ip + offset;
-    return ((ST_LE16)*base) | ((ST_LE16) * (base + 1) << 8) |
-           ((ST_LE16) * (base + 2) << 16) | ((ST_LE16) * (base + 3) << 24);
+static ST_U32 ST_readLE32(const ST_VM_Frame *f, ST_Size offset) {
+    const ST_U8 *base = f->code->instructions + f->ip + offset;
+    return ((ST_U32)*base) | ((ST_U32) * (base + 1) << 8) |
+           ((ST_U32) * (base + 2) << 16) | ((ST_U32) * (base + 3) << 24);
 }
+
+enum { ST_OPCODE_SIZE = sizeof(ST_U8) };
 
 static void ST_Internal_VM_execute(ST_Internal_Context *context,
                                    ST_VM_Frame *frame) {
@@ -721,34 +720,52 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             ST_Object gVarSymb = frame->code->symbTab[ST_readLE16(frame, 1)];
             ST_Object global = ST_getGlobal(context, gVarSymb);
             ST_pushStack(context, global);
-            frame->ip += 1 + sizeof(ST_LE16);
+            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
         } break;
 
         case ST_VM_OP_SETGLOBAL: {
             ST_Object gVarSymb = frame->code->symbTab[ST_readLE16(frame, 1)];
             ST_setGlobal(context, gVarSymb, ST_refStack(context, 0));
             ST_popStack(context);
-            frame->ip += 1 + sizeof(ST_LE16);
+            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
+        } break;
+
+        case ST_VM_OP_GETIVAR: {
+            ST_U16 ivarIndex = ST_readLE16(frame, 1);
+            ST_Object target = ST_refStack(context, 0);
+            ST_popStack(context);
+            ST_pushStack(context, ST_Object_getIVars(target)[ivarIndex]);
+            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
+        } break;
+
+        case ST_VM_OP_SETIVAR: {
+            ST_U16 ivarIndex = ST_readLE16(frame, 1);
+            ST_Object target = ST_refStack(context, 0);
+            ST_Object value = ST_refStack(context, 1);
+            ST_popStack(context);
+            ST_popStack(context);
+            ST_Object_getIVars(target)[ivarIndex] = value;
+            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
         } break;
 
         case ST_VM_OP_PUSHNIL:
             ST_pushStack(context, ST_getNilValue(context));
-            frame->ip += 1;
+            frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHTRUE:
             ST_pushStack(context, ST_getTrueValue(context));
-            frame->ip += 1;
+            frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHFALSE:
             ST_pushStack(context, ST_getFalseValue(context));
-            frame->ip += 1;
+            frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHSYMBOL:
             ST_pushStack(context, frame->code->symbTab[ST_readLE16(frame, 1)]);
-            frame->ip += 1 + sizeof(ST_LE16);
+            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
             break;
 
         case ST_VM_OP_SENDMESSAGE: {
@@ -757,7 +774,7 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             ST_Object receiver = ST_refStack(context, 0);
             ST_Internal_Method *method =
                 ST_Internal_Object_getMethod(context, receiver, selector);
-            frame->ip += 1 + sizeof(ST_LE16);
+            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
             if (method) {
                 switch (method->type) {
                 case ST_METHOD_TYPE_FOREIGN:
@@ -784,22 +801,23 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             const ST_Object selector =
                 frame->code->symbTab[ST_readLE16(frame, 1)];
             const ST_Object target = ST_refStack(context, 0);
-            const ST_Byte argc = frame->code->instructions[frame->ip + 3];
+            const ST_U8 argc = frame->code->instructions[frame->ip + 3];
             ST_MethodMap_Entry *entry =
                 ST_alloc(context, sizeof(ST_MethodMap_Entry));
             ST_BST_Node_init((ST_BST_Node *)entry);
-            frame->ip += 3;
+            frame->ip += sizeof(ST_U8) + sizeof(ST_U16);
             entry->header.symbol = selector;
             entry->method.type = ST_METHOD_TYPE_COMPILED;
             entry->method.argc = argc;
             entry->method.payload.compiledMethod.source = frame->code;
             entry->method.payload.compiledMethod.offset =
-                frame->ip + sizeof(ST_LE32) + 1;
+                frame->ip + sizeof(ST_U32) + 1;
             if (!ST_Class_insertMethodEntry(context, target, entry)) {
                 ST_free(context, entry);
             }
             ST_popStack(context);
-            frame->ip += ST_readLE32(frame, 1) + sizeof(ST_LE32) + 1;
+            frame->ip +=
+                ST_readLE32(frame, 1) + sizeof(ST_U32) + ST_OPCODE_SIZE;
         } break;
 
         case ST_VM_OP_RETURN: {
@@ -816,17 +834,19 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             ST_pushStack(context, ret);
             frame = frame->parent;
             ST_Pool_free(context, &context->vmFramePool, completeFrame);
+            /* NOTE: we jumped frames, reverting back to the instruction pointer
+               before the call, which is why we don't increment frame->ip. */
         } break;
 
         case ST_VM_OP_DUP: {
             ST_Object top = ST_refStack(context, 0);
             ST_pushStack(context, top);
-            ++frame->ip;
+            frame->ip += ST_OPCODE_SIZE;
         } break;
 
         case ST_VM_OP_POP: {
             ST_popStack(context);
-            ++frame->ip;
+            frame->ip += ST_OPCODE_SIZE;
             break;
         }
 

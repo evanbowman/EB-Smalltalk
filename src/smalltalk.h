@@ -13,21 +13,23 @@ typedef size_t ST_Size;
 typedef void *ST_OpaqueStruct;
 typedef ST_OpaqueStruct ST_Context;
 typedef ST_OpaqueStruct ST_Object;
-typedef unsigned char ST_Byte;
+typedef unsigned char ST_U8;
+typedef uint16_t ST_U16;
+typedef uint32_t ST_U32;
 
 typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
 
 ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
-                                ST_Object selector, ST_Byte argc,
+                                ST_Object selector, ST_U8 argc,
                                 ST_Object argv[]);
 
 void ST_Object_setMethod(ST_Context context, ST_Object object,
-                         ST_Object selector, ST_Method method, ST_Byte argc);
+                         ST_Object selector, ST_Method method, ST_U8 argc);
 
 ST_Object ST_Object_getIVar(ST_Context context, ST_Object object,
-                            ST_Size position);
+                            ST_U16 position);
 
-void ST_Object_setIVar(ST_Context context, ST_Object object, ST_Size position,
+void ST_Object_setIVar(ST_Context context, ST_Object object, ST_U16 position,
                        ST_Object value);
 
 typedef struct ST_Context_Configuration {
@@ -58,7 +60,7 @@ ST_Object ST_getFalseValue(ST_Context context);
 typedef struct ST_Code {
     ST_Object *symbTab;
     ST_Size symbTabSize;
-    ST_Byte *instructions;
+    ST_U8 *instructions;
     ST_Size length;
 } ST_Code;
 
