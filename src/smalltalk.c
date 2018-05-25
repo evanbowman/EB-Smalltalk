@@ -312,6 +312,35 @@ typedef struct ST_Class {
     ST_Pool instancePool;
 } ST_Class;
 
+static bool ST_isClass(ST_Internal_Object *object) {
+    return (ST_Class *)object == object->class;
+}
+
+static bool ST_Object_hasIVar(ST_Object object, ST_Size position) {
+    if (ST_isClass(object)) {
+        return false;
+    }
+    if (position >=
+        ((ST_Internal_Object *)object)->class->instanceVariableCount) {
+        return false;
+    }
+    return true;
+}
+
+ST_Object ST_Object_getIVar(ST_Context context, ST_Object object,
+                            ST_Size position) {
+    if (!ST_Object_hasIVar(object, position))
+        return ST_getNilValue(context);
+    return ST_Object_getIVars(object)[position];
+}
+
+void ST_Object_setIVar(ST_Context context, ST_Object object, ST_Size position,
+                       ST_Object value) {
+    if (!ST_Object_hasIVar(object, position))
+        return;
+    ST_Object_getIVars(object)[position] = value;
+}
+
 static ST_Internal_Method *
 ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
                              ST_Internal_Object *selector) {

@@ -24,6 +24,12 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
 void ST_Object_setMethod(ST_Context context, ST_Object object,
                          ST_Object selector, ST_Method method, ST_Byte argc);
 
+ST_Object ST_Object_getIVar(ST_Context context, ST_Object object,
+                            ST_Size position);
+
+void ST_Object_setIVar(ST_Context context, ST_Object object, ST_Size position,
+                       ST_Object value);
+
 typedef struct ST_Context_Configuration {
     struct Memory {
         void *(*allocFn)(size_t);
