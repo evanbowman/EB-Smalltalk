@@ -218,34 +218,40 @@ typedef struct ST_Pool_Node {
      to use your imagination */
 } ST_Pool_Node;
 
+typedef struct ST_Pool_Slab { struct ST_Pool_Slab *next; } ST_Pool_Slab;
+
 typedef struct ST_Pool {
     ST_Size elemSize;
     ST_Pool_Node *freelist;
+    ST_Pool_Slab *slabs;
     ST_Size lastAllocCount;
-    /* TODO: store slabs so we can free them */
 } ST_Pool;
 
-void ST_Pool_grow(ST_Context context, ST_Pool *pool, ST_Size count) {
+static void ST_Pool_grow(ST_Context context, ST_Pool *pool, ST_Size count) {
     const ST_Size poolNodeSize = pool->elemSize + sizeof(ST_Pool_Node);
-    const ST_Size allocSize = poolNodeSize * count;
+    const ST_Size headerSize = sizeof(ST_Pool_Slab *);
+    const ST_Size allocSize = poolNodeSize * count + headerSize;
     ST_U8 *mem = ST_alloc(context, allocSize);
     ST_Size i;
     pool->lastAllocCount = count;
-    for (i = 0; i < allocSize; i += poolNodeSize) {
+    for (i = headerSize; i < allocSize; i += poolNodeSize) {
         ST_Pool_Node *node = (void *)(mem + i);
         node->next = pool->freelist;
         pool->freelist = node;
     }
+    ((ST_Pool_Slab *)mem)->next = pool->slabs;
+    pool->slabs = (ST_Pool_Slab *)mem;
 }
 
-void ST_Pool_init(ST_Context context, ST_Pool *pool, ST_Size elemSize,
-                  ST_Size count) {
+static void ST_Pool_init(ST_Context context, ST_Pool *pool, ST_Size elemSize,
+                         ST_Size count) {
     pool->freelist = NULL;
+    pool->slabs = NULL;
     pool->elemSize = elemSize;
     ST_Pool_grow(context, pool, count);
 }
 
-void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
+static void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
     ST_Pool_Node *ret;
     if (!pool->freelist) {
         ST_Pool_grow(context, pool, pool->lastAllocCount * 2);
@@ -258,10 +264,19 @@ void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
     return (ST_U8 *)ret + sizeof(ST_Pool_Node);
 }
 
-void ST_Pool_free(ST_Context context, ST_Pool *pool, void *mem) {
+static void ST_Pool_free(ST_Context context, ST_Pool *pool, void *mem) {
     ST_Pool_Node *node = (void *)((char *)mem - sizeof(ST_Pool_Node));
     node->next = pool->freelist;
     pool->freelist = node;
+}
+
+static void ST_Pool_release(ST_Context context, ST_Pool *pool) {
+    ST_Pool_Slab *slab = pool->slabs;
+    while (slab) {
+        ST_Pool_Slab *next = slab->next;
+        ST_free(context, slab);
+        slab = next;
+    }
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -486,8 +501,7 @@ static void *ST_Vector_get(ST_Vector *vec, ST_Size index) {
     return vec->begin + index * vec->elemSize;
 }
 
-__attribute__((unused)) static void ST_Vector_free(ST_Context context,
-                                                   ST_Vector *vec) {
+static void ST_Vector_free(ST_Context context, ST_Vector *vec) {
     ST_free(context, vec->begin);
 }
 
@@ -628,6 +642,10 @@ ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
     return newEntry->value;
 }
 
+/* TODO: quit being lazy and implement a non-recursive version. The codebase
+   literally already has a vector container so I could have fixed this in
+   almost the time it took to write this comment but it's not a critical
+   path but anyway I'll fix it someday. */
 static const char *ST_recDecodeSymbol(ST_StringMap_Entry *tree,
                                       ST_Object symbol) {
     if ((ST_Object)tree->value == symbol)
@@ -1020,4 +1038,12 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_initBoolean(context);
     ST_Internal_Context_initErrorHandling(context);
     return context;
+}
+
+void ST_destroyContext(const ST_Context context) {
+    ST_Internal_Context *ctxImpl = context;
+    /* TODO: lots of stuff */
+    ST_Vector_free(context, &ctxImpl->operandStack);
+    ST_Pool_release(context, &ctxImpl->gvarNodePool);
+    ST_Pool_release(context, &ctxImpl->vmFramePool);
 }

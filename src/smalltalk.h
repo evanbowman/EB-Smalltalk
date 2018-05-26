@@ -43,6 +43,8 @@ typedef struct ST_Context_Configuration {
 
 ST_Context ST_createContext(const ST_Context_Configuration *config);
 
+void ST_destroyContext(ST_Context context);
+
 ST_Object ST_requestSymbol(ST_Context context, const char *symbolName);
 
 const char *ST_Symbol_toString(ST_Context context, ST_Object symbol);
@@ -66,11 +68,8 @@ typedef struct ST_Code {
 
 void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
 
-/* ST_Code ST_VM_load(ST_Context context, const char *path); */
-/* void ST_VM_store(ST_Context context, const char *path, ST_Code *code); */
-/* void ST_VM_dispose(ST_Context context, ST_Code *code); */
-
-/* Shortcuts for some common stuff */
+/* Shortcuts for some common stuff. Not super efficient compared to caching
+   the symbols and globals up front if you're calling a method repeatedly. */
 
 #define ST_UNARYSEND(CONTEXT, OBJ, MESSAGE)                                    \
     ST_Object_sendMessage(CONTEXT, OBJ, ST_requestSymbol(CONTEXT, MESSAGE), 0, \
