@@ -283,16 +283,16 @@ static void ST_Pool_release(ST_Context context, ST_Pool *pool) {
 // Method
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef ST_Method ST_ForeignMethod;
+typedef ST_Method ST_PrimitiveMethod;
 typedef struct ST_CompiledMethod {
     const ST_Code *source;
     ST_Size offset;
 } ST_CompiledMethod;
 
 typedef struct ST_Internal_Method {
-    enum { ST_METHOD_TYPE_FOREIGN, ST_METHOD_TYPE_COMPILED } type;
+    enum { ST_METHOD_TYPE_PRIMITIVE, ST_METHOD_TYPE_COMPILED } type;
     union {
-        ST_ForeignMethod foreignMethod;
+        ST_PrimitiveMethod primitiveMethod;
         ST_CompiledMethod compiledMethod;
     } payload;
     ST_U8 argc;
@@ -398,12 +398,12 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
         ST_Internal_Object_getMethod(context, receiver, selector);
     if (method) {
         switch (method->type) {
-        case ST_METHOD_TYPE_FOREIGN:
+        case ST_METHOD_TYPE_PRIMITIVE:
             if (argc != method->argc) {
                 /* FIXME: wrong number of args */
                 return ST_getNilValue(context);
             }
-            return method->payload.foreignMethod(context, receiver, argv);
+            return method->payload.primitiveMethod(context, receiver, argv);
 
         case ST_METHOD_TYPE_COMPILED: {
             ST_U8 i;
@@ -439,12 +439,12 @@ static bool ST_Class_insertMethodEntry(ST_Context context, ST_Class *class,
 
 /* FIXME.. rename to ST_Class_setMethod? Or just ST_setMethod? */
 void ST_Object_setMethod(ST_Context context, ST_Object object,
-                         ST_Object selector, ST_ForeignMethod foreignMethod,
+                         ST_Object selector, ST_PrimitiveMethod primitiveMethod,
                          ST_U8 argc) {
     ST_MethodMap_Entry *entry = ST_alloc(context, sizeof(ST_MethodMap_Entry));
     entry->header.symbol = selector;
-    entry->method.type = ST_METHOD_TYPE_FOREIGN;
-    entry->method.payload.foreignMethod = foreignMethod;
+    entry->method.type = ST_METHOD_TYPE_PRIMITIVE;
+    entry->method.payload.primitiveMethod = primitiveMethod;
     entry->method.argc = argc;
     if (!ST_Class_insertMethodEntry(
             context, ((ST_Internal_Object *)object)->class, entry)) {
@@ -696,9 +696,9 @@ typedef enum ST_VM_Opcode {
     ST_VM_OP_COUNT
 } ST_VM_Opcode;
 
-static void ST_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
-                                           ST_Object receiver,
-                                           ST_Internal_Method *method) {
+static void ST_VM_invokePrimitiveMethod_NArg(ST_Internal_Context *context,
+                                             ST_Object receiver,
+                                             ST_Internal_Method *method) {
     ST_Object *argv = ST_alloc(context, sizeof(ST_Object) * method->argc);
     ST_U8 i;
     for (i = 0; i < method->argc; ++i) {
@@ -706,7 +706,7 @@ static void ST_VM_invokeForeignMethod_NArg(ST_Internal_Context *context,
         ST_popStack(context);
     }
     ST_pushStack(context,
-                 method->payload.foreignMethod(context, receiver, argv));
+                 method->payload.primitiveMethod(context, receiver, argv));
     ST_free(context, argv);
 }
 
@@ -795,9 +795,9 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
             if (method) {
                 switch (method->type) {
-                case ST_METHOD_TYPE_FOREIGN:
+                case ST_METHOD_TYPE_PRIMITIVE:
                     ST_popStack(context); /* pop receiver */
-                    ST_VM_invokeForeignMethod_NArg(context, receiver, method);
+                    ST_VM_invokePrimitiveMethod_NArg(context, receiver, method);
                     break;
 
                 case ST_METHOD_TYPE_COMPILED: {
