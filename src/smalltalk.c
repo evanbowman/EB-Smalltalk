@@ -1,6 +1,12 @@
 #include "smalltalk.h"
 
 struct ST_Internal_Context;
+
+/* Note: stack operations are not currently bounds-checked. But I'm thinking
+   there's a more efficient way of preventing bad access than checking every
+   call. e.g. A compiler would know how many local variables are in a method,
+   so lets eventually make the vm do the stack size check upon entry into a
+   method. */
 static void ST_pushStack(struct ST_Internal_Context *context, ST_Object val);
 static void ST_popStack(struct ST_Internal_Context *context);
 static ST_Object ST_refStack(struct ST_Internal_Context *context,
@@ -12,8 +18,6 @@ static ST_Size ST_stackSize(struct ST_Internal_Context *context);
    ST_free directly. */
 static void *ST_alloc(ST_Context context, ST_Size size);
 static void ST_free(ST_Context context, void *memory);
-static void ST_copy(ST_Context context, void *dst, const void *src,
-                    ST_Size bytes);
 
 /*//////////////////////////////////////////////////////////////////////////////
 // Helper functions
@@ -73,59 +77,6 @@ static int ST_clamp(int value, int low, int high) {
         return high;
     else
         return value;
-}
-
-/*//////////////////////////////////////////////////////////////////////////////
-// Vector
-/////////////////////////////////////////////////////////////////////////////*/
-
-typedef struct ST_Vector {
-    char *begin;
-    char *end;
-    ST_Size capacity;
-    ST_Size elemSize;
-} ST_Vector;
-
-static bool ST_Vector_init(ST_Context context, ST_Vector *vec, ST_Size elemSize,
-                           ST_Size capacity) {
-    vec->begin = ST_alloc(context, elemSize * capacity);
-    if (UNEXPECTED(!vec->begin))
-        return false;
-    vec->capacity = capacity;
-    vec->end = vec->begin;
-    vec->elemSize = elemSize;
-    return true;
-}
-
-static ST_Size ST_Vector_len(ST_Vector *vec) {
-    return (vec->end - vec->begin) / vec->elemSize;
-}
-
-static bool ST_Vector_push(ST_Context context, ST_Vector *vec,
-                           const void *element) {
-    const ST_Size len = ST_Vector_len(vec);
-    if (UNEXPECTED(len == vec->capacity)) {
-        void *newBuffer;
-        vec->capacity = vec->capacity * 2;
-        newBuffer = ST_alloc(context, vec->capacity * vec->elemSize);
-        ST_copy(context, newBuffer, vec->begin, len * vec->elemSize);
-        ST_free(context, vec->begin);
-        vec->begin = newBuffer;
-        vec->end = vec->begin + len;
-    }
-    ST_copy(context, vec->end, element, vec->elemSize);
-    vec->end += vec->elemSize;
-    return true;
-}
-
-static void ST_Vector_pop(ST_Vector *vec) { vec->end -= vec->elemSize; }
-
-static void *ST_Vector_get(ST_Vector *vec, ST_Size index) {
-    return vec->begin + index * vec->elemSize;
-}
-
-static void ST_Vector_free(ST_Context context, ST_Vector *vec) {
-    ST_free(context, vec->begin);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -211,7 +162,10 @@ typedef struct ST_Internal_Context {
     struct ST_Internal_Object *nilValue;
     struct ST_Internal_Object *trueValue;
     struct ST_Internal_Object *falseValue;
-    ST_Vector operandStack;
+    struct {
+        const struct ST_Internal_Object **base;
+        struct ST_Internal_Object **top;
+    } operandStack;
     ST_Pool gvarNodePool;
     ST_Pool vmFramePool;
     ST_Pool methodNodePool;
@@ -400,6 +354,18 @@ typedef struct ST_Class {
     ST_Pool instancePool;
 } ST_Class;
 
+ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
+                                          ST_Class *class) {
+    ST_Internal_Object *instance = ST_Pool_alloc(context, &class->instancePool);
+    ST_Internal_Object **ivars = ST_Object_getIVars(instance);
+    ST_Size i;
+    for (i = 0; i < class->instanceVariableCount; ++i) {
+        ivars[i] = ST_getNilValue(context);
+    }
+    instance->class = class;
+    return instance;
+}
+
 static bool ST_isClass(ST_Internal_Object *object) {
     return (ST_Class *)object == object->class;
 }
@@ -545,11 +511,6 @@ static void ST_free(ST_Context context, void *memory) {
     ((ST_Internal_Context *)context)->config.memory.freeFn(memory);
 }
 
-static void ST_copy(ST_Context context, void *dst, const void *src,
-                    ST_Size bytes) {
-    ((ST_Internal_Context *)context)->config.memory.copyFn(dst, src, bytes);
-}
-
 typedef struct ST_StringMap_Entry {
     ST_BST_Node nodeHeader;
     char *key;
@@ -569,25 +530,21 @@ typedef struct ST_GlobalVarMap_Entry {
 } ST_GlobalVarMap_Entry;
 
 static void ST_pushStack(ST_Internal_Context *context, ST_Object val) {
-    ST_Vector_push(context, &context->operandStack, &val);
+    *(context->operandStack.top++) = val;
 }
 
 static void ST_popStack(struct ST_Internal_Context *context) {
-    ST_Vector_pop(&context->operandStack);
+    --context->operandStack.top;
 }
 
 static ST_Object ST_refStack(struct ST_Internal_Context *context,
                              ST_Size offset) {
-    ST_Vector *stack = &context->operandStack;
-    void *result = ST_Vector_get(stack, ST_Vector_len(stack) - 1);
-    if (UNEXPECTED(!result)) {
-        return ST_getNilValue(context);
-    }
-    return *(ST_Internal_Object **)result;
+    return *(context->operandStack.top - offset);
 }
 
 static ST_Size ST_stackSize(struct ST_Internal_Context *context) {
-    return ST_Vector_len(&context->operandStack);
+    return (const ST_Internal_Object **)context->operandStack.top -
+           context->operandStack.base;
 }
 
 ST_Object ST_getGlobal(ST_Context context, ST_Object symbol) {
@@ -907,14 +864,7 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset) {
 
 static ST_Object ST_new(ST_Context context, ST_Object self, ST_Object argv[]) {
     ST_Class *class = self;
-    ST_Internal_Object *instance = ST_Pool_alloc(context, &class->instancePool);
-    ST_Internal_Object **ivars = ST_Object_getIVars(instance);
-    ST_Size i;
-    for (i = 0; i < class->instanceVariableCount; ++i) {
-        ivars[i] = ST_getNilValue(context);
-    }
-    instance->class = class;
-    return instance;
+    return ST_Class_makeInstance(context, class);
 }
 
 /* TODO: make subclass accept instanceVariableNames as a param so we know
@@ -961,14 +911,12 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     /* We need to do things manually for a bit, until we've defined the
      symbol class and the new method, because most of the functions in
      the runtime depend on Symbol. */
-    ST_Class *cObject = ST_alloc(context, sizeof(ST_Class));
-    ST_Class *cSymbol = ST_alloc(context, sizeof(ST_Class));
-    ST_Internal_Object *symbolSymbol =
-        ST_alloc(context, sizeof(ST_Internal_Object));
-    ST_Internal_Object *newSymbol =
-        ST_alloc(context, sizeof(ST_Internal_Object));
+    ST_Class *cObject = ST_Pool_alloc(context, &context->classPool);
+    ST_Class *cSymbol = ST_Pool_alloc(context, &context->classPool);
+    ST_Internal_Object *symbolSymbol;
+    ST_Internal_Object *newSymbol;
     ST_StringMap_Entry *newEntry =
-        ST_alloc(context, sizeof(ST_StringMap_Entry));
+        ST_Pool_alloc(context, &context->strmapNodePool);
     ST_BST_Node_init((ST_BST_Node *)newEntry);
     cObject->object.class = cObject;
     cObject->super = cObject;
@@ -980,13 +928,13 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     cSymbol->methodTree = NULL;
     cSymbol->instanceVariableCount = 0;
     ST_Pool_init(context, &cSymbol->instancePool, sizeof(ST_Object), 512);
-    symbolSymbol->class = cSymbol;
-    newSymbol->class = cSymbol;
-    context->symbolRegistry = ST_alloc(context, sizeof(ST_StringMap_Entry));
+    symbolSymbol = ST_Class_makeInstance(context, cSymbol);
+    newSymbol = ST_Class_makeInstance(context, cSymbol);
+    context->symbolRegistry = ST_Pool_alloc(context, &context->strmapNodePool);
     ST_BST_Node_init((ST_BST_Node *)context->symbolRegistry);
     context->symbolRegistry->key = ST_strdup(context, "Symbol");
     context->symbolRegistry->value = symbolSymbol;
-    context->globalScope = ST_alloc(context, sizeof(ST_GlobalVarMap_Entry));
+    context->globalScope = ST_Pool_alloc(context, &context->gvarNodePool);
     ST_BST_Node_init((ST_BST_Node *)context->globalScope);
     context->globalScope->header.symbol = symbolSymbol;
     context->globalScope->value = (ST_Object)cSymbol;
@@ -1033,8 +981,6 @@ static void ST_initBoolean(ST_Internal_Context *context) {
     context->falseValue = ST_NEW(context, "False");
 }
 
-#include <stdio.h>
-
 ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_Internal_Context *ctx =
         config->memory.allocFn(sizeof(ST_Internal_Context));
@@ -1046,12 +992,11 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 1024);
     ST_Pool_init(ctx, &ctx->strmapNodePool, sizeof(ST_StringMap_Entry), 1024);
     ST_Pool_init(ctx, &ctx->classPool, sizeof(ST_Class), 100);
-    printf("%d %d %d %d %d\n", (int)sizeof(ST_GlobalVarMap_Entry),
-           (int)sizeof(ST_VM_Frame), (int)sizeof(ST_MethodMap_Entry),
-           (int)sizeof(ST_StringMap_Entry), (int)sizeof(ST_Class));
     ST_Internal_Context_bootstrap(ctx);
-    ST_Vector_init(ctx, &ctx->operandStack, sizeof(ST_Internal_Object *),
-                   config->memory.stackSize);
+    ctx->operandStack.base = ST_alloc(ctx, sizeof(ST_Internal_Object *) *
+                                               config->memory.stackCapacity);
+    ctx->operandStack.top =
+        (struct ST_Internal_Object **)ctx->operandStack.base;
     ST_SETMETHOD(ctx, "Object", "subclass", ST_subclass, 0);
     ST_SETMETHOD(ctx, "Object", "superclass", ST_superclass, 0);
     ST_SETMETHOD(ctx, "Object", "class", ST_class, 0);
@@ -1064,7 +1009,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
 void ST_destroyContext(const ST_Context context) {
     ST_Internal_Context *ctxImpl = context;
     /* TODO: lots of stuff */
-    ST_Vector_free(context, &ctxImpl->operandStack);
+    ST_free(context, ctxImpl->operandStack.base);
     ST_Pool_release(context, &ctxImpl->gvarNodePool);
     ST_Pool_release(context, &ctxImpl->vmFramePool);
     ST_Pool_release(context, &ctxImpl->methodNodePool);

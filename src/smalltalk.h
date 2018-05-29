@@ -38,7 +38,7 @@ typedef struct ST_Context_Configuration {
         void (*freeFn)(void *);
         void *(*copyFn)(void *, const void *, size_t);
         void *(*setFn)(void *, int c, size_t n);
-        ST_Size stackSize;
+        ST_Size stackCapacity;
     } memory;
 } ST_Context_Configuration;
 
