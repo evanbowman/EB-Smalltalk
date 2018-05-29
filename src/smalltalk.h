@@ -23,7 +23,7 @@ ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
                                 ST_Object selector, ST_U8 argc,
                                 ST_Object argv[]);
 
-void ST_Object_setMethod(ST_Context context, ST_Object object,
+void ST_Object_setMethod(ST_Context context, ST_Object class,
                          ST_Object selector, ST_Method method, ST_U8 argc);
 
 ST_Object ST_Object_getIVar(ST_Context context, ST_Object object,
@@ -38,6 +38,7 @@ typedef struct ST_Context_Configuration {
         void (*freeFn)(void *);
         void *(*copyFn)(void *, const void *, size_t);
         void *(*setFn)(void *, int c, size_t n);
+        ST_Size stackSize;
     } memory;
 } ST_Context_Configuration;
 

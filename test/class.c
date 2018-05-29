@@ -3,7 +3,7 @@
 #include <string.h>
 
 int main() {
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset}};
+    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
     ST_Context context = ST_createContext(&config);
     ST_Object objSymb = ST_requestSymbol(context, "Object");
     ST_Object subcSymb = ST_requestSymbol(context, "subclass");

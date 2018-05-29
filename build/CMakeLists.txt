@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8)
 
-add_definitions("-pedantic -Werror -Wall")
+add_definitions("-pedantic -Werror -Wall -Wmissing-field-initializers")
 set(CMAKE_C_FLAGS "-std=c90")
 set(CMAKE_CXX_FLAGS "-std=c++11")
 
