@@ -1,7 +1,6 @@
 #include "smalltalk.h"
 
 struct ST_Internal_Context;
-
 static void ST_pushStack(struct ST_Internal_Context *context, ST_Object val);
 static void ST_popStack(struct ST_Internal_Context *context);
 static ST_Object ST_refStack(struct ST_Internal_Context *context,
@@ -73,6 +72,148 @@ static int ST_clamp(int value, int low, int high) {
     else
         return value;
 }
+
+/*//////////////////////////////////////////////////////////////////////////////
+// Vector
+/////////////////////////////////////////////////////////////////////////////*/
+
+typedef struct ST_Vector {
+    char *begin;
+    char *end;
+    ST_Size capacity;
+    ST_Size elemSize;
+} ST_Vector;
+
+static bool ST_Vector_init(ST_Context context, ST_Vector *vec, ST_Size elemSize,
+                           ST_Size capacity) {
+    vec->begin = ST_alloc(context, elemSize * capacity);
+    if (UNEXPECTED(!vec->begin))
+        return false;
+    vec->capacity = capacity;
+    vec->end = vec->begin;
+    vec->elemSize = elemSize;
+    return true;
+}
+
+static ST_Size ST_Vector_len(ST_Vector *vec) {
+    return (vec->end - vec->begin) / vec->elemSize;
+}
+
+static bool ST_Vector_push(ST_Context context, ST_Vector *vec,
+                           const void *element) {
+    const ST_Size len = ST_Vector_len(vec);
+    if (UNEXPECTED(len == vec->capacity)) {
+        void *newBuffer;
+        vec->capacity = vec->capacity * 2;
+        newBuffer = ST_alloc(context, vec->capacity * vec->elemSize);
+        ST_copy(context, newBuffer, vec->begin, len * vec->elemSize);
+        ST_free(context, vec->begin);
+        vec->begin = newBuffer;
+        vec->end = vec->begin + len;
+    }
+    ST_copy(context, vec->end, element, vec->elemSize);
+    vec->end += vec->elemSize;
+    return true;
+}
+
+static void ST_Vector_pop(ST_Vector *vec) { vec->end -= vec->elemSize; }
+
+static void *ST_Vector_get(ST_Vector *vec, ST_Size index) {
+    return vec->begin + index * vec->elemSize;
+}
+
+static void ST_Vector_free(ST_Context context, ST_Vector *vec) {
+    ST_free(context, vec->begin);
+}
+
+/*//////////////////////////////////////////////////////////////////////////////
+// Pool
+/////////////////////////////////////////////////////////////////////////////*/
+
+typedef struct ST_Pool_Node {
+    struct ST_Pool_Node *next;
+    /* Technically the allocated memory lives in-place here in the node, but
+     because this is ansi c, we don't have flexible structs yet, so you have
+     to use your imagination */
+} ST_Pool_Node;
+
+typedef struct ST_Pool_Slab { struct ST_Pool_Slab *next; } ST_Pool_Slab;
+
+typedef struct ST_Pool {
+    ST_Size elemSize;
+    ST_Pool_Node *freelist;
+    ST_Pool_Slab *slabs;
+    ST_Size lastAllocCount;
+} ST_Pool;
+
+static void ST_Pool_grow(ST_Context context, ST_Pool *pool, ST_Size count) {
+    const ST_Size poolNodeSize = pool->elemSize + sizeof(ST_Pool_Node);
+    const ST_Size headerSize = sizeof(ST_Pool_Slab *);
+    const ST_Size allocSize = poolNodeSize * count + headerSize;
+    ST_U8 *mem = ST_alloc(context, allocSize);
+    ST_Size i;
+    pool->lastAllocCount = count;
+    for (i = headerSize; i < allocSize; i += poolNodeSize) {
+        ST_Pool_Node *node = (void *)(mem + i);
+        node->next = pool->freelist;
+        pool->freelist = node;
+    }
+    ((ST_Pool_Slab *)mem)->next = pool->slabs;
+    pool->slabs = (ST_Pool_Slab *)mem;
+}
+
+static void ST_Pool_init(ST_Context context, ST_Pool *pool, ST_Size elemSize,
+                         ST_Size count) {
+    pool->freelist = NULL;
+    pool->slabs = NULL;
+    pool->elemSize = elemSize;
+    ST_Pool_grow(context, pool, count);
+}
+
+static void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
+    ST_Pool_Node *ret;
+    if (!pool->freelist) {
+        ST_Pool_grow(context, pool, pool->lastAllocCount * 2);
+    }
+    ret = pool->freelist;
+    pool->freelist = pool->freelist->next;
+    /* Note: advancing the node pointer by the size of the node effectively
+     strips the header, thus setting the pointer to the contained element.
+     see comment in ST_Pool_Node. */
+    return (ST_U8 *)ret + sizeof(ST_Pool_Node);
+}
+
+static void ST_Pool_free(ST_Context context, ST_Pool *pool, void *mem) {
+    ST_Pool_Node *node = (void *)((char *)mem - sizeof(ST_Pool_Node));
+    node->next = pool->freelist;
+    pool->freelist = node;
+}
+
+static void ST_Pool_release(ST_Context context, ST_Pool *pool) {
+    ST_Pool_Slab *slab = pool->slabs;
+    while (slab) {
+        ST_Pool_Slab *next = slab->next;
+        ST_free(context, slab);
+        slab = next;
+    }
+}
+
+/*//////////////////////////////////////////////////////////////////////////////
+// Context struct
+/////////////////////////////////////////////////////////////////////////////*/
+
+typedef struct ST_Internal_Context {
+    ST_Context_Configuration config;
+    struct ST_StringMap_Entry *symbolRegistry;
+    struct ST_GlobalVarMap_Entry *globalScope;
+    struct ST_Internal_Object *nilValue;
+    struct ST_Internal_Object *trueValue;
+    struct ST_Internal_Object *falseValue;
+    ST_Vector operandStack;
+    ST_Pool gvarNodePool;
+    ST_Pool vmFramePool;
+    ST_Pool methodNodePool;
+} ST_Internal_Context;
 
 /*//////////////////////////////////////////////////////////////////////////////
 // Search Tree (Intrusive BST)
@@ -204,78 +345,6 @@ static ST_Cmp ST_SymbolMap_comparator(void *left, void *right) {
         return ST_Cmp_Greater;
     } else {
         return ST_Cmp_Eq;
-    }
-}
-
-/*//////////////////////////////////////////////////////////////////////////////
-// Pool
-/////////////////////////////////////////////////////////////////////////////*/
-
-typedef struct ST_Pool_Node {
-    struct ST_Pool_Node *next;
-    /* Technically the allocated memory lives in-place here in the node, but
-     because this is ansi c, we don't have flexible structs yet, so you have
-     to use your imagination */
-} ST_Pool_Node;
-
-typedef struct ST_Pool_Slab { struct ST_Pool_Slab *next; } ST_Pool_Slab;
-
-typedef struct ST_Pool {
-    ST_Size elemSize;
-    ST_Pool_Node *freelist;
-    ST_Pool_Slab *slabs;
-    ST_Size lastAllocCount;
-} ST_Pool;
-
-static void ST_Pool_grow(ST_Context context, ST_Pool *pool, ST_Size count) {
-    const ST_Size poolNodeSize = pool->elemSize + sizeof(ST_Pool_Node);
-    const ST_Size headerSize = sizeof(ST_Pool_Slab *);
-    const ST_Size allocSize = poolNodeSize * count + headerSize;
-    ST_U8 *mem = ST_alloc(context, allocSize);
-    ST_Size i;
-    pool->lastAllocCount = count;
-    for (i = headerSize; i < allocSize; i += poolNodeSize) {
-        ST_Pool_Node *node = (void *)(mem + i);
-        node->next = pool->freelist;
-        pool->freelist = node;
-    }
-    ((ST_Pool_Slab *)mem)->next = pool->slabs;
-    pool->slabs = (ST_Pool_Slab *)mem;
-}
-
-static void ST_Pool_init(ST_Context context, ST_Pool *pool, ST_Size elemSize,
-                         ST_Size count) {
-    pool->freelist = NULL;
-    pool->slabs = NULL;
-    pool->elemSize = elemSize;
-    ST_Pool_grow(context, pool, count);
-}
-
-static void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
-    ST_Pool_Node *ret;
-    if (!pool->freelist) {
-        ST_Pool_grow(context, pool, pool->lastAllocCount * 2);
-    }
-    ret = pool->freelist;
-    pool->freelist = pool->freelist->next;
-    /* Note: advancing the node pointer by the size of the node effectively
-     strips the header, thus setting the pointer to the contained element.
-     see comment in ST_Pool_Node. */
-    return (ST_U8 *)ret + sizeof(ST_Pool_Node);
-}
-
-static void ST_Pool_free(ST_Context context, ST_Pool *pool, void *mem) {
-    ST_Pool_Node *node = (void *)((char *)mem - sizeof(ST_Pool_Node));
-    node->next = pool->freelist;
-    pool->freelist = node;
-}
-
-static void ST_Pool_release(ST_Context context, ST_Pool *pool) {
-    ST_Pool_Slab *slab = pool->slabs;
-    while (slab) {
-        ST_Pool_Slab *next = slab->next;
-        ST_free(context, slab);
-        slab = next;
     }
 }
 
@@ -441,85 +510,22 @@ static bool ST_Class_insertMethodEntry(ST_Context context, ST_Class *class,
 void ST_Object_setMethod(ST_Context context, ST_Object object,
                          ST_Object selector, ST_PrimitiveMethod primitiveMethod,
                          ST_U8 argc) {
-    ST_MethodMap_Entry *entry = ST_alloc(context, sizeof(ST_MethodMap_Entry));
+    ST_Pool *methodPool = &((ST_Internal_Context *)context)->methodNodePool;
+    ST_MethodMap_Entry *entry = ST_Pool_alloc(context, methodPool);
+    ST_BST_Node_init((ST_BST_Node *)entry);
     entry->header.symbol = selector;
     entry->method.type = ST_METHOD_TYPE_PRIMITIVE;
     entry->method.payload.primitiveMethod = primitiveMethod;
     entry->method.argc = argc;
     if (!ST_Class_insertMethodEntry(
             context, ((ST_Internal_Object *)object)->class, entry)) {
-        ST_free(context, entry);
+        ST_Pool_free(context, methodPool, entry);
     }
-}
-
-/*//////////////////////////////////////////////////////////////////////////////
-// Vector
-/////////////////////////////////////////////////////////////////////////////*/
-
-typedef struct ST_Vector {
-    char *begin;
-    char *end;
-    ST_Size capacity;
-    ST_Size elemSize;
-} ST_Vector;
-
-static bool ST_Vector_init(ST_Context context, ST_Vector *vec, ST_Size elemSize,
-                           ST_Size capacity) {
-    vec->begin = ST_alloc(context, elemSize * capacity);
-    if (UNEXPECTED(!vec->begin))
-        return false;
-    vec->capacity = capacity;
-    vec->end = vec->begin;
-    vec->elemSize = elemSize;
-    return true;
-}
-
-static ST_Size ST_Vector_len(ST_Vector *vec) {
-    return (vec->end - vec->begin) / vec->elemSize;
-}
-
-static bool ST_Vector_push(ST_Context context, ST_Vector *vec,
-                           const void *element) {
-    const ST_Size len = ST_Vector_len(vec);
-    if (UNEXPECTED(len == vec->capacity)) {
-        void *newBuffer;
-        vec->capacity = vec->capacity * 2;
-        newBuffer = ST_alloc(context, vec->capacity * vec->elemSize);
-        ST_copy(context, newBuffer, vec->begin, len * vec->elemSize);
-        ST_free(context, vec->begin);
-        vec->begin = newBuffer;
-        vec->end = vec->begin + len;
-    }
-    ST_copy(context, vec->end, element, vec->elemSize);
-    vec->end += vec->elemSize;
-    return true;
-}
-
-static void ST_Vector_pop(ST_Vector *vec) { vec->end -= vec->elemSize; }
-
-static void *ST_Vector_get(ST_Vector *vec, ST_Size index) {
-    return vec->begin + index * vec->elemSize;
-}
-
-static void ST_Vector_free(ST_Context context, ST_Vector *vec) {
-    ST_free(context, vec->begin);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
 // Context
 /////////////////////////////////////////////////////////////////////////////*/
-
-typedef struct ST_Internal_Context {
-    ST_Context_Configuration config;
-    struct ST_StringMap_Entry *symbolRegistry;
-    struct ST_GlobalVarMap_Entry *globalScope;
-    ST_Internal_Object *nilValue;
-    ST_Internal_Object *trueValue;
-    ST_Internal_Object *falseValue;
-    ST_Vector operandStack;
-    ST_Pool gvarNodePool;
-    ST_Pool vmFramePool;
-} ST_Internal_Context;
 
 static void *ST_alloc(ST_Context context, ST_Size size) {
     void *mem = ((ST_Internal_Context *)context)->config.memory.allocFn(size);
@@ -821,7 +827,7 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             const ST_Object target = ST_refStack(context, 0);
             const ST_U8 argc = frame->code->instructions[frame->ip + 3];
             ST_MethodMap_Entry *entry =
-                ST_alloc(context, sizeof(ST_MethodMap_Entry));
+                ST_Pool_alloc(context, &context->methodNodePool);
             ST_BST_Node_init((ST_BST_Node *)entry);
             frame->ip += sizeof(ST_U8) + sizeof(ST_U16);
             entry->header.symbol = selector;
@@ -831,7 +837,7 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             entry->method.payload.compiledMethod.offset =
                 frame->ip + sizeof(ST_U32) + 1;
             if (!ST_Class_insertMethodEntry(context, target, entry)) {
-                ST_free(context, entry);
+                ST_Pool_free(context, &context->methodNodePool, entry);
             }
             ST_popStack(context);
             frame->ip +=
@@ -956,6 +962,7 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
         ST_alloc(context, sizeof(ST_Internal_Object));
     ST_StringMap_Entry *newEntry =
         ST_alloc(context, sizeof(ST_StringMap_Entry));
+    ST_BST_Node_init((ST_BST_Node *)newEntry);
     cObject->object.class = cObject;
     cObject->super = cObject;
     cObject->methodTree = NULL;
@@ -1028,6 +1035,8 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_Pool_init(context, &context->gvarNodePool, sizeof(ST_GlobalVarMap_Entry),
                  1000);
     ST_Pool_init(context, &context->vmFramePool, sizeof(ST_VM_Frame), 50);
+    ST_Pool_init(context, &context->methodNodePool, sizeof(ST_MethodMap_Entry),
+                 1024);
     ST_Internal_Context_bootstrap(context);
     ST_Vector_init(context, &context->operandStack,
                    sizeof(ST_Internal_Object *), 1024);
