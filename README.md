@@ -1,6 +1,6 @@
 # EB Smalltalk
 
-Unit Test Status:  <img src="https://travis-ci.org/evanbowman/smalltalk-embedded.svg?branch=master"/> 
+Unit Test Status: [![Build Status](https://travis-ci.org/evanbowman/EB-Smalltalk.svg?branch=master)](https://travis-ci.org/evanbowman/EB-Smalltalk)
 
 ## Introduction
 
