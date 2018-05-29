@@ -668,7 +668,7 @@ typedef enum ST_VM_Opcode {
 static void ST_VM_invokePrimitiveMethod_NArg(ST_Internal_Context *context,
                                              ST_Object receiver,
                                              ST_Internal_Method *method) {
-    ST_Object *argv = ST_alloc(context, sizeof(ST_Object) * method->argc);
+    ST_Object argv[UINT8_MAX];
     ST_U8 i;
     for (i = 0; i < method->argc; ++i) {
         argv[i] = ST_refStack(context, 0);
@@ -676,7 +676,6 @@ static void ST_VM_invokePrimitiveMethod_NArg(ST_Internal_Context *context,
     }
     ST_pushStack(context,
                  method->payload.primitiveMethod(context, receiver, argv));
-    ST_free(context, argv);
 }
 
 typedef struct ST_VM_Frame {
