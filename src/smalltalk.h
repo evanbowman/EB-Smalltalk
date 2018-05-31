@@ -19,18 +19,16 @@ typedef uint32_t ST_U32;
 
 typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
 
-ST_Object ST_Object_sendMessage(ST_Context context, ST_Object receiver,
-                                ST_Object selector, ST_U8 argc,
-                                ST_Object argv[]);
+ST_Object ST_sendMessage(ST_Context context, ST_Object receiver,
+                         ST_Object selector, ST_U8 argc, ST_Object argv[]);
 
-void ST_Object_setMethod(ST_Context context, ST_Object class,
-                         ST_Object selector, ST_Method method, ST_U8 argc);
+void ST_setMethod(ST_Context context, ST_Object targetClass, ST_Object selector,
+                  ST_Method method, ST_U8 argc);
 
-ST_Object ST_Object_getIVar(ST_Context context, ST_Object object,
-                            ST_U16 position);
+ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position);
 
-void ST_Object_setIVar(ST_Context context, ST_Object object, ST_U16 position,
-                       ST_Object value);
+void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
+                ST_Object value);
 
 typedef struct ST_Context_Configuration {
     struct Memory {
@@ -73,8 +71,7 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
    the symbols and globals up front if you're calling a method repeatedly. */
 
 #define ST_UNARYSEND(CONTEXT, OBJ, MESSAGE)                                    \
-    ST_Object_sendMessage(CONTEXT, OBJ, ST_requestSymbol(CONTEXT, MESSAGE), 0, \
-                          NULL)
+    ST_sendMessage(CONTEXT, OBJ, ST_requestSymbol(CONTEXT, MESSAGE), 0, NULL)
 
 #define ST_NEW(CONTEXT, CLASSNAME_CSTR)                                        \
     ST_UNARYSEND(CONTEXT, ST_getGlobal(CONTEXT, ST_requestSymbol(              \
@@ -82,21 +79,20 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
                  "new")
 
 #define ST_INIT(CONTEXT, OBJ, ARGC, ARGV)                                      \
-    ST_Object_sendMessage(CONTEXT, OBJ, ST_requestSymbol(CONTEXT, "init"),     \
-                          ARGC, ARGV)
+    ST_sendMessage(CONTEXT, OBJ, ST_requestSymbol(CONTEXT, "init"), ARGC, ARGV)
 
 #define ST_SUBCLASS(CONTEXT, BASE_CLASSNAME_STR, DERIVED_CLASSNAME_STR)        \
     ST_setGlobal(CONTEXT, ST_requestSymbol(CONTEXT, DERIVED_CLASSNAME_STR),    \
-                 ST_Object_sendMessage(                                        \
+                 ST_sendMessage(                                               \
                      CONTEXT,                                                  \
                      ST_getGlobal(context, ST_requestSymbol(                   \
                                                CONTEXT, BASE_CLASSNAME_STR)),  \
                      ST_requestSymbol(CONTEXT, "subclass"), 0, NULL))
 
 #define ST_SETMETHOD(CONTEXT, CNAME, MNAME, C_FUNC, ARGC)                      \
-    ST_Object_setMethod(                                                       \
-        CONTEXT, ST_getGlobal(CONTEXT, ST_requestSymbol(CONTEXT, CNAME)),      \
-        ST_requestSymbol(CONTEXT, MNAME), C_FUNC, ARGC)
+    ST_setMethod(CONTEXT,                                                      \
+                 ST_getGlobal(CONTEXT, ST_requestSymbol(CONTEXT, CNAME)),      \
+                 ST_requestSymbol(CONTEXT, MNAME), C_FUNC, ARGC)
 
 #endif /* SMALLTALK_H */
 
