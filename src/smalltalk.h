@@ -30,6 +30,8 @@ ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position);
 void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
                 ST_Object value);
 
+ST_Object ST_getClass(ST_Context context, ST_Object object);
+
 typedef struct ST_Context_Configuration {
     struct Memory {
         void *(*allocFn)(size_t);
@@ -77,9 +79,6 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
     ST_UNARYSEND(CONTEXT, ST_getGlobal(CONTEXT, ST_requestSymbol(              \
                                                     CONTEXT, CLASSNAME_CSTR)), \
                  "new")
-
-#define ST_INIT(CONTEXT, OBJ, ARGC, ARGV)                                      \
-    ST_sendMessage(CONTEXT, OBJ, ST_requestSymbol(CONTEXT, "init"), ARGC, ARGV)
 
 #define ST_SUBCLASS(CONTEXT, BASE_CLASSNAME_STR, DERIVED_CLASSNAME_STR)        \
     ST_setGlobal(CONTEXT, ST_requestSymbol(CONTEXT, DERIVED_CLASSNAME_STR),    \

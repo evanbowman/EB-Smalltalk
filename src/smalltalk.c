@@ -162,7 +162,7 @@ typedef struct ST_Internal_Context {
     struct ST_Internal_Object *nilValue;
     struct ST_Internal_Object *trueValue;
     struct ST_Internal_Object *falseValue;
-    struct {
+    struct OperandStack {
         const struct ST_Internal_Object **base;
         struct ST_Internal_Object **top;
     } operandStack;
@@ -342,8 +342,12 @@ typedef struct ST_Internal_Object {
      struct ST_Internal_Object *InstanceVariables[] */
 } ST_Internal_Object;
 
-ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
+static ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
     return (void *)((ST_U8 *)object + sizeof(ST_Internal_Object));
+}
+
+ST_Object ST_getClass(ST_Context context, ST_Object object) {
+    return ((ST_Internal_Object *)object)->class;
 }
 
 typedef struct ST_Class {
@@ -409,11 +413,10 @@ ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
         if (found) {
             return &((ST_MethodMap_Entry *)found)->method;
         } else {
-            /* Note: the current dummy implementation of metaclasses works by having a
-   class
-   hold a circular reference to itself, so we need to test
-   self/super-equality
-   before walking up the meta-class hierarchy. */
+            /* Note: the current dummy implementation of metaclasses works
+               by having a class hold a circular reference to itself, so we
+               need to test self/super-equality before walking up the meta-class
+               hierarchy. */
             if (currentClass->super != currentClass) {
                 currentClass = currentClass->super;
             } else {
@@ -427,7 +430,7 @@ static void ST_failedMethodLookup(ST_Context context, ST_Object receiver,
                                   ST_Object selector) {
     ST_Object err = ST_NEW(context, "MessageNotUnderstood");
     ST_sendMessage(context, receiver,
-                   ST_requestSymbol(context, "doesNotUnderstand"), 1, &err);
+                   ST_requestSymbol(context, "doesNotUnderstand:"), 1, &err);
 }
 
 ST_Object ST_sendMessage(ST_Context context, ST_Object receiver,
@@ -475,7 +478,6 @@ static bool ST_Class_insertMethodEntry(ST_Context context, ST_Class *class,
     return true;
 }
 
-/* FIXME.. rename to ST_Class_setMethod? Or just ST_setMethod? */
 void ST_setMethod(ST_Context context, ST_Object object, ST_Object selector,
                   ST_PrimitiveMethod primitiveMethod, ST_U8 argc) {
     ST_Pool *methodPool = &((ST_Internal_Context *)context)->methodNodePool;
@@ -551,8 +553,7 @@ ST_Object ST_getGlobal(ST_Context context, ST_Object symbol) {
     searchTmpl.symbol = symbol;
     found = ST_BST_find(globalScope, &searchTmpl, ST_SymbolMap_comparator);
     if (UNEXPECTED(!found)) {
-        /* printf("warning: global variable \"%s\" not found\n", */
-        /*        ST_Symbol_toString(context, symbol)); */
+
         return ST_getNilValue(context);
     }
     ST_BST_splay(globalScope, &symbol, ST_SymbolMap_comparator);
@@ -607,10 +608,6 @@ ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
     return newEntry->value;
 }
 
-/* TODO: quit being lazy and implement a non-recursive version. The codebase
-   literally already has a vector container so I could have fixed this in
-   almost the time it took to write this comment but it's not a critical
-   path but anyway I'll fix it someday. */
 static const char *ST_recDecodeSymbol(ST_StringMap_Entry *tree,
                                       ST_Object symbol) {
     if ((ST_Object)tree->value == symbol)
@@ -848,65 +845,83 @@ void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset) {
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
-// Number
+// Integer
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef int32_t ST_Number_Rep;
-typedef struct ST_Number {
+typedef int32_t ST_Integer_Rep;
+typedef struct ST_Integer {
     ST_Internal_Object object;
-    ST_Number_Rep value;
-} ST_Number;
+    ST_Integer_Rep value;
+} ST_Integer;
 
-#include <stdio.h>
-
-#define DEF_NUMBER_OP(NAME, OP)                                                \
-    ST_Object NAME(ST_Context context, ST_Object self, ST_Object argv[]) {     \
-        ST_Internal_Object *lhs = self, *rhs = argv[0];                        \
-        ST_Class *cNumber = lhs->class;                                        \
-        ST_Number *newNum;                                                     \
-        if (rhs->class != cNumber) {                                           \
-            return ST_getNilValue(context); /* FIXME: raise error */           \
-        }                                                                      \
-        newNum = (ST_Number *)ST_Class_makeInstance(context, cNumber);         \
-        newNum->value = ((ST_Number *)lhs)->value OP((ST_Number *)rhs)->value; \
-        return newNum;                                                         \
-    }
-
-DEF_NUMBER_OP(ST_Number_add, +)
-DEF_NUMBER_OP(ST_Number_sub, -)
-DEF_NUMBER_OP(ST_Number_mul, *)
-DEF_NUMBER_OP(ST_Number_div, /)
-DEF_NUMBER_OP(ST_Number_mod, %)
-DEF_NUMBER_OP(ST_Number_xor, ^)
-
-ST_Object ST_Number_rawGet(ST_Context context, ST_Object self,
-                           ST_Object argv[]) {
-    return (ST_Object)(intptr_t)((ST_Number *)self)->value;
+bool ST_Integer_typecheck(ST_Internal_Object *lhs, ST_Internal_Object *rhs) {
+    return lhs->class == rhs->class;
 }
 
-ST_Object ST_Number_rawSet(ST_Context context, ST_Object self,
-                           ST_Object argv[]) {
-    ((ST_Number *)self)->value = (ST_Number_Rep)(intptr_t)argv[0];
+ST_Object ST_Integer_add(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+    ST_Integer *ret;
+    if (!ST_Integer_typecheck(self, argv[0]))
+        return ST_getNilValue(ctx);
+    ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
+    ret->value = ((ST_Integer *)self)->value + ((ST_Integer *)argv[0])->value;
+    return ret;
+}
+
+ST_Object ST_Integer_sub(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+    ST_Integer *ret;
+    if (!ST_Integer_typecheck(self, argv[0]))
+        return ST_getNilValue(ctx);
+    ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
+    ret->value = ((ST_Integer *)self)->value - ((ST_Integer *)argv[0])->value;
+    return ret;
+}
+
+ST_Object ST_Integer_mul(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+    ST_Integer *ret;
+    if (!ST_Integer_typecheck(self, argv[0]))
+        return ST_getNilValue(ctx);
+    ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
+    ret->value = ((ST_Integer *)self)->value * ((ST_Integer *)argv[0])->value;
+    return ret;
+}
+
+ST_Object ST_Integer_div(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+    ST_Integer *ret;
+    if (!ST_Integer_typecheck(self, argv[0]))
+        return ST_getNilValue(ctx);
+    ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
+    ret->value = ((ST_Integer *)self)->value / ((ST_Integer *)argv[0])->value;
+    return ret;
+}
+
+ST_Object ST_Integer_rawGet(ST_Context context, ST_Object self,
+                            ST_Object argv[]) {
+    return (ST_Object)(intptr_t)((ST_Integer *)self)->value;
+}
+
+ST_Object ST_Integer_rawSet(ST_Context context, ST_Object self,
+                            ST_Object argv[]) {
+    ((ST_Integer *)self)->value = (ST_Integer_Rep)(intptr_t)argv[0];
     return ST_getNilValue(context);
 }
 
-void ST_initNumber(ST_Internal_Context *ctx) {
+void ST_initInteger(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_requestSymbol(ctx, "Object"));
-    ST_Class *cNum = ST_Pool_alloc(ctx, &ctx->classPool);
-    cNum->instanceVariableCount = 0;
-    ST_Pool_init(ctx, &cNum->instancePool, sizeof(ST_Number), 128);
-    cNum->methodTree = NULL;
-    cNum->super = cObj;
-    cNum->object.class = cNum;
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "+"), ST_Number_add, 1);
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "-"), ST_Number_sub, 1);
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "*"), ST_Number_mul, 1);
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "/"), ST_Number_div, 1);
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "%"), ST_Number_mod, 1);
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "^"), ST_Number_xor, 1);
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "rSet"), ST_Number_rawSet, 1);
-    ST_setMethod(ctx, cNum, ST_requestSymbol(ctx, "rGet"), ST_Number_rawGet, 0);
-    ST_setGlobal(ctx, ST_requestSymbol(ctx, "Number"), cNum);
+    ST_Class *cInt = ST_Pool_alloc(ctx, &ctx->classPool);
+    cInt->instanceVariableCount = 0;
+    ST_Pool_init(ctx, &cInt->instancePool, sizeof(ST_Integer), 128);
+    cInt->methodTree = NULL;
+    cInt->super = cObj;
+    cInt->object.class = cInt;
+    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "+"), ST_Integer_add, 1);
+    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "-"), ST_Integer_sub, 1);
+    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "*"), ST_Integer_mul, 1);
+    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "/"), ST_Integer_div, 1);
+    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "rawSet:"), ST_Integer_rawSet,
+                 1);
+    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "rawGet"), ST_Integer_rawGet,
+                 0);
+    ST_setGlobal(ctx, ST_requestSymbol(ctx, "Integer"), cInt);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -959,7 +974,7 @@ static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
 static void
 ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "MessageNotUnderstood");
-    ST_SETMETHOD(context, "Object", "doesNotUnderstand", ST_doesNotUnderstand,
+    ST_SETMETHOD(context, "Object", "doesNotUnderstand:", ST_doesNotUnderstand,
                  1);
     ST_SUBCLASS(context, "Object", "Message");
 }
@@ -1030,10 +1045,10 @@ static void ST_initBoolean(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "Boolean");
     ST_SUBCLASS(context, "Boolean", "True");
     ST_SUBCLASS(context, "Boolean", "False");
-    ST_SETMETHOD(context, "True", "ifTrue", ST_ifTrueImplForTrue, 1);
-    ST_SETMETHOD(context, "True", "ifFalse", ST_nopMethod, 1);
-    ST_SETMETHOD(context, "False", "ifFalse", ST_ifFalseImplForFalse, 1);
-    ST_SETMETHOD(context, "False", "ifTrue", ST_nopMethod, 1);
+    ST_SETMETHOD(context, "True", "ifTrue:", ST_ifTrueImplForTrue, 1);
+    ST_SETMETHOD(context, "True", "ifFalse:", ST_nopMethod, 1);
+    ST_SETMETHOD(context, "False", "ifFalse:", ST_ifFalseImplForFalse, 1);
+    ST_SETMETHOD(context, "False", "ifTrue:", ST_nopMethod, 1);
     context->trueValue = ST_NEW(context, "True");
     context->falseValue = ST_NEW(context, "False");
 }
@@ -1060,7 +1075,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_initNil(ctx);
     ST_initBoolean(ctx);
     ST_Internal_Context_initErrorHandling(ctx);
-    ST_initNumber(ctx);
+    ST_initInteger(ctx);
     return ctx;
 }
 
