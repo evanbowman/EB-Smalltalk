@@ -86,8 +86,8 @@ static int ST_clamp(int value, int low, int high) {
 typedef struct ST_Pool_Node {
     struct ST_Pool_Node *next;
     /* Technically the allocated memory lives in-place here in the node, but
-   because this is ansi c, we don't have flexible structs yet, so you have
-   to use your imagination */
+ because this is ansi c, we don't have flexible structs yet, so you have
+ to use your imagination */
 } ST_Pool_Node;
 
 typedef struct ST_Pool_Slab { struct ST_Pool_Slab *next; } ST_Pool_Slab;
@@ -131,8 +131,8 @@ static void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
     ret = pool->freelist;
     pool->freelist = pool->freelist->next;
     /* Note: advancing the node pointer by the size of the node effectively
-   strips the header, thus setting the pointer to the contained element.
-   see comment in ST_Pool_Node. */
+ strips the header, thus setting the pointer to the contained element.
+ see comment in ST_Pool_Node. */
     return (ST_U8 *)ret + sizeof(ST_Pool_Node);
 }
 
@@ -337,9 +337,9 @@ typedef struct ST_MethodMap_Entry {
 typedef struct ST_Internal_Object {
     struct ST_Class *class;
     /* Note:
-     Unless an object is a class, there's an instance variable array inlined
-     at the end of the struct.
-     struct ST_Internal_Object *InstanceVariables[] */
+   Unless an object is a class, there's an instance variable array inlined
+   at the end of the struct.
+   struct ST_Internal_Object *InstanceVariables[] */
 } ST_Internal_Object;
 
 static ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
@@ -357,6 +357,14 @@ typedef struct ST_Class {
     ST_U16 instanceVariableCount;
     ST_Pool instancePool;
 } ST_Class;
+
+ST_U16 ST_getIVarCount(ST_Context context, ST_Object object) {
+    return ((ST_Internal_Object *)object)->class->instanceVariableCount;
+}
+
+ST_Object ST_getSuper(ST_Context context, ST_Object object) {
+    return ((ST_Internal_Object *)object)->class->super;
+}
 
 ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
                                           ST_Class *class) {
@@ -392,26 +400,26 @@ static bool ST_isClass(ST_Internal_Object *object) {
     return (ST_Class *)object == object->class;
 }
 
-static bool ST_Object_hasIVar(ST_Object object, ST_U16 position) {
+static bool ST_Object_hasIVar(ST_Context context, ST_Object object,
+                              ST_U16 position) {
     if (ST_isClass(object)) {
         return false;
     }
-    if (position >=
-        ((ST_Internal_Object *)object)->class->instanceVariableCount) {
+    if (position >= ST_getIVarCount(context, object)) {
         return false;
     }
     return true;
 }
 
 ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position) {
-    if (!ST_Object_hasIVar(object, position))
+    if (!ST_Object_hasIVar(context, object, position))
         return ST_getNilValue(context);
     return ST_Object_getIVars(object)[position];
 }
 
 void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
                 ST_Object value) {
-    if (!ST_Object_hasIVar(object, position)) {
+    if (!ST_Object_hasIVar(context, object, position)) {
         /* FIXME: raise error! */
         return;
     }
@@ -432,9 +440,9 @@ ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
             return &((ST_MethodMap_Entry *)found)->method;
         } else {
             /* Note: the current dummy implementation of metaclasses works
-               by having a class hold a circular reference to itself, so we
-               need to test self/super-equality before walking up the meta-class
-               hierarchy. */
+         by having a class hold a circular reference to itself, so we
+         need to test self/super-equality before walking up the meta-class
+         hierarchy. */
             if (currentClass->super != currentClass) {
                 currentClass = currentClass->super;
             } else {
@@ -832,7 +840,7 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             frame = frame->parent;
             ST_Pool_free(context, &context->vmFramePool, completeFrame);
             /* NOTE: we jumped frames, reverting back to the instruction pointer
-         before the call, which is why we don't increment frame->ip. */
+   before the call, which is why we don't increment frame->ip. */
         } break;
 
         case ST_VM_OP_DUP: {
@@ -872,11 +880,13 @@ typedef struct ST_Integer {
     ST_Integer_Rep value;
 } ST_Integer;
 
-bool ST_Integer_typecheck(ST_Internal_Object *lhs, ST_Internal_Object *rhs) {
+static bool ST_Integer_typecheck(ST_Internal_Object *lhs,
+                                 ST_Internal_Object *rhs) {
     return lhs->class == rhs->class;
 }
 
-ST_Object ST_Integer_add(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+static ST_Object ST_Integer_add(ST_Context ctx, ST_Object self,
+                                ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
         return ST_getNilValue(ctx);
@@ -885,7 +895,8 @@ ST_Object ST_Integer_add(ST_Context ctx, ST_Object self, ST_Object argv[]) {
     return ret;
 }
 
-ST_Object ST_Integer_sub(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+static ST_Object ST_Integer_sub(ST_Context ctx, ST_Object self,
+                                ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
         return ST_getNilValue(ctx);
@@ -894,7 +905,8 @@ ST_Object ST_Integer_sub(ST_Context ctx, ST_Object self, ST_Object argv[]) {
     return ret;
 }
 
-ST_Object ST_Integer_mul(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+static ST_Object ST_Integer_mul(ST_Context ctx, ST_Object self,
+                                ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
         return ST_getNilValue(ctx);
@@ -903,7 +915,8 @@ ST_Object ST_Integer_mul(ST_Context ctx, ST_Object self, ST_Object argv[]) {
     return ret;
 }
 
-ST_Object ST_Integer_div(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+static ST_Object ST_Integer_div(ST_Context ctx, ST_Object self,
+                                ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
         return ST_getNilValue(ctx);
@@ -912,18 +925,18 @@ ST_Object ST_Integer_div(ST_Context ctx, ST_Object self, ST_Object argv[]) {
     return ret;
 }
 
-ST_Object ST_Integer_rawGet(ST_Context context, ST_Object self,
-                            ST_Object argv[]) {
+static ST_Object ST_Integer_rawGet(ST_Context context, ST_Object self,
+                                   ST_Object argv[]) {
     return (ST_Object)(intptr_t)((ST_Integer *)self)->value;
 }
 
-ST_Object ST_Integer_rawSet(ST_Context context, ST_Object self,
-                            ST_Object argv[]) {
+static ST_Object ST_Integer_rawSet(ST_Context context, ST_Object self,
+                                   ST_Object argv[]) {
     ((ST_Integer *)self)->value = (ST_Integer_Rep)(intptr_t)argv[0];
     return ST_getNilValue(context);
 }
 
-void ST_initInteger(ST_Internal_Context *ctx) {
+static void ST_initInteger(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_requestSymbol(ctx, "Object"));
     ST_Class *cInt = ST_Pool_alloc(ctx, &ctx->classPool);
     cInt->instanceVariableCount = 0;
@@ -943,6 +956,76 @@ void ST_initInteger(ST_Internal_Context *ctx) {
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
+// Array
+/////////////////////////////////////////////////////////////////////////////*/
+
+typedef struct ST_Array {
+    ST_Internal_Object object;
+    ST_Integer_Rep length;
+    ST_Object *data;
+} ST_Array;
+
+static ST_Object ST_Array_new(ST_Context context, ST_Object self,
+                              ST_Object argv[]) {
+    ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Array *arr = (ST_Array *)ST_Class_makeInstance(context, self);
+    ST_Integer_Rep i;
+    arr->length = (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
+    arr->data = ST_alloc(context, sizeof(ST_Object) * arr->length);
+    for (i = 0; i < arr->length; ++i) {
+        arr->data[i] = ST_getNilValue(context);
+    }
+    return arr;
+}
+
+static ST_Object ST_Array_at(ST_Context context, ST_Object self,
+                             ST_Object argv[]) {
+    ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Integer_Rep index =
+        (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
+    if (index > -1 && index < ((ST_Array *)self)->length) {
+        return ((ST_Array *)self)->data[index];
+    }
+    return ST_getNilValue(context);
+}
+
+static ST_Object ST_Array_set(ST_Context context, ST_Object self,
+                              ST_Object argv[]) {
+    ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Integer_Rep index =
+        (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
+    if (index > -1 && index < ((ST_Array *)self)->length) {
+        ((ST_Array *)self)->data[index] = argv[1];
+    }
+    return ST_getNilValue(context);
+}
+
+static ST_Object ST_Array_len(ST_Context context, ST_Object self,
+                              ST_Object argv[]) {
+    ST_Object result = ST_NEW(context, "Integer");
+    ST_Object rawsetSymb = ST_requestSymbol(context, "rawSet:");
+    ST_Object rsetArgs[1];
+    rsetArgs[0] = (ST_Object)(intptr_t)((ST_Array *)self)->length;
+    ST_sendMessage(context, result, rawsetSymb, 1, rsetArgs);
+    return result;
+}
+
+static void ST_initArray(ST_Internal_Context *ctx) {
+    ST_Class *cObj = ST_getGlobal(ctx, ST_requestSymbol(ctx, "Object"));
+    ST_Class *cArr = ST_Pool_alloc(ctx, &ctx->classPool);
+    cArr->instanceVariableCount = 0;
+    ST_Pool_init(ctx, &cArr->instancePool, sizeof(ST_Array), 64);
+    cArr->methodTree = NULL;
+    cArr->super = cObj;
+    cArr->object.class = cArr;
+    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "length"), ST_Array_len, 0);
+    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "new:"), ST_Array_new, 1);
+    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "at:"), ST_Array_at, 1);
+    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "at:put:"), ST_Array_set, 2);
+    ST_setGlobal(ctx, ST_requestSymbol(ctx, "Array"), cArr);
+}
+
+/*//////////////////////////////////////////////////////////////////////////////
 // GC
 /////////////////////////////////////////////////////////////////////////////*/
 
@@ -957,18 +1040,24 @@ static ST_Object ST_new(ST_Context context, ST_Object self, ST_Object argv[]) {
     return ST_Class_makeInstance(context, class);
 }
 
-/* TODO: make subclass accept instanceVariableNames as a param so we know
-   what element size to use when creating the instance pool */
 static ST_Object ST_subclass(ST_Context context, ST_Object self,
                              ST_Object argv[]) {
-    return ST_Class_subclass(context, self, 0, 0, 128);
+    return ST_Class_subclass(context, self, 0, 0, 4);
 }
 
-/* i.e., the version with ivarnames, class var names, etc. */
 static ST_Object ST_subclassExtended(ST_Context context, ST_Object self,
                                      ST_Object argv[]) {
-    /* TODO: parse ivar count and cvar count out of argv, etc. */
-    return ST_Class_subclass(context, self, 0, 0, 128);
+    ST_Object rawgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Object lenSymb = ST_requestSymbol(context, "length");
+    ST_Object ivarNamesLength =
+        ST_sendMessage(context, argv[1], lenSymb, 0, NULL);
+    ST_Object cvarNamesLength =
+        ST_sendMessage(context, argv[2], lenSymb, 0, NULL);
+    ST_Integer_Rep ivarCount =
+        (intptr_t)ST_sendMessage(context, ivarNamesLength, rawgetSymb, 0, NULL);
+    ST_Integer_Rep cvarCount =
+        (intptr_t)ST_sendMessage(context, cvarNamesLength, rawgetSymb, 0, NULL);
+    return ST_Class_subclass(context, self, ivarCount, cvarCount, 4);
 }
 
 static ST_Object ST_class(ST_Context context, ST_Object self,
@@ -991,8 +1080,8 @@ ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
 
 static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     /* We need to do things manually for a bit, until we've defined the
-   symbol class and the new method, because most of the functions in
-   the runtime depend on Symbol. */
+ symbol class and the new method, because most of the functions in
+ the runtime depend on Symbol. */
     ST_Class *cObject = ST_Pool_alloc(context, &context->classPool);
     ST_Class *cSymbol = ST_Pool_alloc(context, &context->classPool);
     ST_Internal_Object *symbolSymbol;
@@ -1084,6 +1173,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_initBoolean(ctx);
     ST_Internal_Context_initErrorHandling(ctx);
     ST_initInteger(ctx);
+    ST_initArray(ctx);
     return ctx;
 }
 

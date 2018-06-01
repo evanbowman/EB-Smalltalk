@@ -20,6 +20,8 @@ endfunction()
 unit_test(symbol)
 unit_test(class)
 unit_test(number)
+unit_test(array)
+unit_test(members)
 
 add_custom_command(TARGET smalltalk
   PRE_LINK

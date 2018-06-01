@@ -7,7 +7,6 @@ int main() {
     ST_Context context = ST_createContext(&config);
     ST_Object objSymb = ST_requestSymbol(context, "Object");
     ST_Object subcSymb = ST_requestSymbol(context, "subclass");
-    ST_Object superSymb = ST_requestSymbol(context, "superclass");
     ST_Object classSymb = ST_requestSymbol(context, "class");
     ST_Object newSymb = ST_requestSymbol(context, "new");
 
@@ -17,8 +16,7 @@ int main() {
     ST_Object widjetInst =
         ST_sendMessage(context, widjetClass, newSymb, 0, NULL);
 
-    ST_Object widjetSuper =
-        ST_sendMessage(context, widjetInst, superSymb, 0, NULL);
+    ST_Object widjetSuper = ST_getSuper(context, widjetInst);
     ST_Object widjetsClass =
         ST_sendMessage(context, widjetInst, classSymb, 0, NULL);
 

@@ -18,7 +18,6 @@ typedef uint16_t ST_U16;
 typedef uint32_t ST_U32;
 
 typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
-
 ST_Object ST_sendMessage(ST_Context context, ST_Object receiver,
                          ST_Object selector, ST_U8 argc, ST_Object argv[]);
 
@@ -30,7 +29,11 @@ ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position);
 void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
                 ST_Object value);
 
+ST_U16 ST_getIVarCount(ST_Context context, ST_Object object);
+
 ST_Object ST_getClass(ST_Context context, ST_Object object);
+
+ST_Object ST_getSuper(ST_Context context, ST_Object object);
 
 typedef struct ST_Context_Configuration {
     struct Memory {
