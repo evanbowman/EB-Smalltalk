@@ -370,6 +370,24 @@ ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
     return instance;
 }
 
+ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
+                            ST_Size instanceVariableCount,
+                            ST_Size classVariableCount,
+                            ST_Size instancePoolHint) {
+    ST_Class *sub =
+        ST_Pool_alloc(context, &((ST_Internal_Context *)context)->classPool);
+    sub->object.class = sub;
+    sub->super = class;
+    sub->instanceVariableCount =
+        ((ST_Class *)class)->instanceVariableCount + instanceVariableCount;
+    sub->methodTree = NULL;
+    ST_Pool_init(context, &sub->instancePool,
+                 sizeof(ST_Internal_Object) +
+                     sizeof(ST_Internal_Object *) * sub->instanceVariableCount,
+                 instancePoolHint);
+    return sub;
+}
+
 static bool ST_isClass(ST_Internal_Object *object) {
     return (ST_Class *)object == object->class;
 }
@@ -943,22 +961,14 @@ static ST_Object ST_new(ST_Context context, ST_Object self, ST_Object argv[]) {
    what element size to use when creating the instance pool */
 static ST_Object ST_subclass(ST_Context context, ST_Object self,
                              ST_Object argv[]) {
-    ST_Class *sub =
-        ST_Pool_alloc(context, &((ST_Internal_Context *)context)->classPool);
-    sub->object.class = sub;
-    sub->super = self; /* Note: receiver is a class */
-    sub->instanceVariableCount = ((ST_Class *)self)->instanceVariableCount;
-    sub->methodTree = NULL;
-    ST_Pool_init(context, &sub->instancePool,
-                 sizeof(ST_Internal_Object) +
-                     sizeof(ST_Internal_Object *) * sub->instanceVariableCount,
-                 100 /* FIXME: better initial size? */);
-    return sub;
+    return ST_Class_subclass(context, self, 0, 0, 128);
 }
 
-static ST_Object ST_superclass(ST_Context context, ST_Object self,
-                               ST_Object argv[]) {
-    return ((ST_Internal_Object *)self)->class->super;
+/* i.e., the version with ivarnames, class var names, etc. */
+static ST_Object ST_subclassExtended(ST_Context context, ST_Object self,
+                                     ST_Object argv[]) {
+    /* TODO: parse ivar count and cvar count out of argv, etc. */
+    return ST_Class_subclass(context, self, 0, 0, 128);
 }
 
 static ST_Object ST_class(ST_Context context, ST_Object self,
@@ -994,12 +1004,8 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     cObject->super = cObject;
     cObject->methodTree = NULL;
     cObject->instanceVariableCount = 0;
-    ST_Pool_init(context, &cObject->instancePool, sizeof(ST_Object), 100);
-    cSymbol->super = cObject;
-    cSymbol->object.class = cSymbol;
-    cSymbol->methodTree = NULL;
-    cSymbol->instanceVariableCount = 0;
-    ST_Pool_init(context, &cSymbol->instancePool, sizeof(ST_Object), 512);
+    ST_Pool_init(context, &cObject->instancePool, sizeof(ST_Object), 10);
+    cSymbol = ST_Class_subclass(context, cObject, 0, 0, 512);
     symbolSymbol = ST_Class_makeInstance(context, cSymbol);
     newSymbol = ST_Class_makeInstance(context, cSymbol);
     context->symbolRegistry = ST_Pool_alloc(context, &context->strmapNodePool);
@@ -1070,7 +1076,9 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ctx->operandStack.top =
         (struct ST_Internal_Object **)ctx->operandStack.base;
     ST_SETMETHOD(ctx, "Object", "subclass", ST_subclass, 0);
-    ST_SETMETHOD(ctx, "Object", "superclass", ST_superclass, 0);
+    ST_SETMETHOD(ctx, "Object",
+                 "subclass:instanceVariableNames:classVariableNames:",
+                 ST_subclassExtended, 3);
     ST_SETMETHOD(ctx, "Object", "class", ST_class, 0);
     ST_initNil(ctx);
     ST_initBoolean(ctx);
