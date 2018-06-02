@@ -123,10 +123,13 @@ static void ST_Pool_init(ST_Context context, ST_Pool *pool, ST_Size elemSize,
     ST_Pool_grow(context, pool, count);
 }
 
+enum { ST_POOL_GROWTH_FACTOR = 2 };
+
 static void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
     ST_Pool_Node *ret;
     if (!pool->freelist) {
-        ST_Pool_grow(context, pool, pool->lastAllocCount * 2);
+        ST_Pool_grow(context, pool,
+                     pool->lastAllocCount * ST_POOL_GROWTH_FACTOR);
     }
     ret = pool->freelist;
     pool->freelist = pool->freelist->next;
@@ -134,6 +137,24 @@ static void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
  strips the header, thus setting the pointer to the contained element.
  see comment in ST_Pool_Node. */
     return (ST_U8 *)ret + sizeof(ST_Pool_Node);
+}
+
+/* Note: only meant for use by the garbage collector */
+void ST_Pool_scan(ST_Context context, ST_Pool *pool,
+                  void (*visitorFn)(ST_Context, void *)) {
+    ST_Pool_Slab *slab = pool->slabs;
+    ST_Size slabElemCount = pool->lastAllocCount;
+    while (slab) {
+        ST_U8 *slabMem = ((ST_U8 *)slab + sizeof(ST_Pool_Slab));
+        ST_Size nodeSize = pool->elemSize + sizeof(ST_Pool_Node);
+        ST_Size slabSize = slabElemCount * nodeSize;
+        ST_Size i;
+        for (i = 0; i < slabSize; i += nodeSize) {
+            visitorFn(context, slabMem + i + sizeof(ST_Pool_Node));
+        }
+        slab = slab->next;
+        slabElemCount /= ST_POOL_GROWTH_FACTOR;
+    }
 }
 
 static void ST_Pool_free(ST_Context context, ST_Pool *pool, void *mem) {
@@ -334,8 +355,15 @@ typedef struct ST_MethodMap_Entry {
     ST_Internal_Method method;
 } ST_MethodMap_Entry;
 
+enum ST_GC_Mask {
+    ST_GC_MASK_ALIVE = 1,
+    ST_GC_MASK_MARKED = 1 << 1,
+    ST_GC_MASK_PERSISTENT = 1 << 2
+};
+
 typedef struct ST_Internal_Object {
     struct ST_Class *class;
+    ST_U8 gcMask;
     /* Note:
    Unless an object is a class, there's an instance variable array inlined
    at the end of the struct.
@@ -375,6 +403,7 @@ ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
         ivars[i] = ST_getNilValue(context);
     }
     instance->class = class;
+    instance->gcMask = ST_GC_MASK_ALIVE;
     return instance;
 }
 
@@ -385,6 +414,7 @@ ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
     ST_Class *sub =
         ST_Pool_alloc(context, &((ST_Internal_Context *)context)->classPool);
     sub->object.class = sub;
+    sub->object.gcMask = ST_GC_MASK_ALIVE;
     sub->super = class;
     sub->instanceVariableCount =
         ((ST_Class *)class)->instanceVariableCount + instanceVariableCount;
@@ -944,6 +974,7 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     cInt->methodTree = NULL;
     cInt->super = cObj;
     cInt->object.class = cInt;
+    cInt->object.gcMask = ST_GC_MASK_ALIVE;
     ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "+"), ST_Integer_add, 1);
     ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "-"), ST_Integer_sub, 1);
     ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "*"), ST_Integer_mul, 1);
@@ -1018,6 +1049,7 @@ static void ST_initArray(ST_Internal_Context *ctx) {
     cArr->methodTree = NULL;
     cArr->super = cObj;
     cArr->object.class = cArr;
+    cArr->object.gcMask = ST_GC_MASK_ALIVE;
     ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "length"), ST_Array_len, 0);
     ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "new:"), ST_Array_new, 1);
     ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "at:"), ST_Array_at, 1);
@@ -1027,9 +1059,38 @@ static void ST_initArray(ST_Internal_Context *ctx) {
 
 /*//////////////////////////////////////////////////////////////////////////////
 // GC
+//
+// Here we have an old-fashioned mark and sweep collector. Fine for our
+// purposes.
+//
 /////////////////////////////////////////////////////////////////////////////*/
 
-/* TODO */
+void ST_GC_run(ST_Internal_Context *context) {}
+
+void ST_GC_mark(ST_Internal_Context *context) {}
+
+void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
+    ST_Internal_Object *obj = instanceMem;
+    if (obj->gcMask & ST_GC_MASK_ALIVE) {
+        if (obj->gcMask & ST_GC_MASK_MARKED ||
+            obj->gcMask & ST_GC_MASK_PERSISTENT) {
+            obj->gcMask &= ~ST_GC_MASK_MARKED;
+        } else {
+            ST_Pool_free(context, &obj->class->instancePool, obj);
+        }
+    }
+}
+
+void ST_GC_sweepVisitClass(ST_Context context, void *classMem) {
+    ST_Class *class = classMem;
+    if (class->object.gcMask & ST_GC_MASK_ALIVE) {
+        ST_Pool_scan(context, &class->instancePool, ST_GC_sweepVisitInstance);
+    }
+}
+
+void ST_GC_sweep(ST_Internal_Context *context) {
+    ST_Pool_scan(context, &context->classPool, ST_GC_sweepVisitClass);
+}
 
 /*//////////////////////////////////////////////////////////////////////////////
 // Language types and methods
