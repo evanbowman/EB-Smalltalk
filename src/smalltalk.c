@@ -372,6 +372,18 @@ typedef struct ST_Internal_Object {
    struct ST_Internal_Object *InstanceVariables[] */
 } ST_Internal_Object;
 
+void ST_Object_setGCMask(ST_Object obj, enum ST_GC_Mask mask) {
+    ((ST_Internal_Object*)obj)->gcMask |= mask;
+}
+
+void ST_Object_unsetGCMask(ST_Object obj, enum ST_GC_Mask mask) {
+    ((ST_Internal_Object*)obj)->gcMask &= ~mask;
+}
+
+bool ST_Object_matchGCMask(ST_Object obj, enum ST_GC_Mask mask) {
+    return ((ST_Internal_Object*)obj)->gcMask & mask;
+}
+
 static ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
     return (void *)((ST_U8 *)object + sizeof(ST_Internal_Object));
 }
@@ -406,7 +418,7 @@ ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
         ivars[i] = ST_getNilValue(context);
     }
     instance->class = class;
-    instance->gcMask = ST_GC_MASK_ALIVE;
+    ST_Object_setGCMask(instance, ST_GC_MASK_ALIVE);
     return instance;
 }
 
@@ -417,7 +429,7 @@ ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
     ST_Class *sub =
         ST_Pool_alloc(context, &((ST_Internal_Context *)context)->classPool);
     sub->object.class = sub;
-    sub->object.gcMask = ST_GC_MASK_ALIVE;
+    ST_Object_setGCMask(sub, ST_GC_MASK_ALIVE);
     sub->super = class;
     sub->instanceVariableCount =
         ((ST_Class *)class)->instanceVariableCount + instanceVariableCount;
@@ -666,7 +678,7 @@ ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
     newSymb = ST_NEW(context, "Symbol");
     /* Symbols aren't global, or on the stack, so we have to preserve or the
        collector, thinking there are no refs, would deallocate them */
-    newSymb->gcMask |= ST_GC_MASK_PRESERVE;
+    ST_Object_setGCMask(newSymb, ST_GC_MASK_PRESERVE);
     newEntry->value = newSymb;
     if (!ST_BST_insert((ST_BST_Node **)&extCtx->symbolRegistry,
                        &newEntry->nodeHeader, ST_StringMap_comparator)) {
@@ -988,7 +1000,7 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     cInt->finalizer = NULL;
     cInt->super = cObj;
     cInt->object.class = cInt;
-    cInt->object.gcMask = ST_GC_MASK_ALIVE;
+    ST_Object_setGCMask(cInt, ST_GC_MASK_ALIVE);
     ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "+"), ST_Integer_add, 1);
     ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "-"), ST_Integer_sub, 1);
     ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "*"), ST_Integer_mul, 1);
@@ -1108,7 +1120,7 @@ static void ST_initArray(ST_Internal_Context *ctx) {
 
 static void ST_GC_markObject(ST_Internal_Context *context,
                              ST_Internal_Object *object) {
-    object->gcMask |= ST_GC_MASK_MARKED;
+    ST_Object_setGCMask(object, ST_GC_MASK_MARKED);
     if (!ST_isClass(object)) {
         ST_Internal_Object **ivars = ST_Object_getIVars(object);
         ST_Size i;
@@ -1129,9 +1141,9 @@ static void ST_GC_mark(ST_Internal_Context *context) {
 
 static void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
     ST_Internal_Object *obj = instanceMem;
-    if (obj->gcMask & ST_GC_MASK_ALIVE) {
-        if (obj->gcMask & (ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
-            obj->gcMask &= ~ST_GC_MASK_MARKED;
+    if (ST_Object_matchGCMask(obj, ST_GC_MASK_ALIVE)) {
+        if (ST_Object_matchGCMask(obj, ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
+            ST_Object_unsetGCMask(obj, ST_GC_MASK_MARKED);
         } else {
             if (obj->class->finalizer) {
                 obj->class->finalizer(context, obj);
@@ -1144,7 +1156,7 @@ static void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
 
 static void ST_GC_sweepVisitClass(ST_Context context, void *classMem) {
     ST_Class *class = classMem;
-    if (class->object.gcMask & ST_GC_MASK_ALIVE) {
+    if (ST_Object_matchGCMask(class, ST_GC_MASK_ALIVE)) {
         ST_Pool_scan(context, &class->instancePool, ST_GC_sweepVisitInstance);
     }
 }
@@ -1225,6 +1237,8 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     cSymbol = ST_Class_subclass(context, cObject, 0, 0, 512);
     symbolSymbol = ST_Class_makeInstance(context, cSymbol);
     newSymbol = ST_Class_makeInstance(context, cSymbol);
+    ST_Object_setGCMask(symbolSymbol, ST_GC_MASK_PRESERVE);
+    ST_Object_setGCMask(newSymbol, ST_GC_MASK_PRESERVE);
     context->symbolRegistry = ST_Pool_alloc(context, &context->strmapNodePool);
     ST_BST_Node_init((ST_BST_Node *)context->symbolRegistry);
     context->symbolRegistry->key = ST_strdup(context, "Symbol");
