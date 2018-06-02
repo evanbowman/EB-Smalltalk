@@ -653,6 +653,7 @@ ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
     ST_BST_Node *found;
     ST_StringMap_Entry searchTmpl;
     ST_StringMap_Entry *newEntry;
+    ST_Internal_Object *newSymb;
     searchTmpl.key = (char *)symbolName;
     found = ST_BST_find((ST_BST_Node **)&extCtx->symbolRegistry, &searchTmpl,
                         ST_StringMap_comparator);
@@ -662,7 +663,11 @@ ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
     newEntry = ST_Pool_alloc(context, &extCtx->strmapNodePool);
     ST_BST_Node_init((ST_BST_Node *)newEntry);
     newEntry->key = ST_strdup(context, symbolName);
-    newEntry->value = ST_NEW(context, "Symbol");
+    newSymb = ST_NEW(context, "Symbol");
+    /* Symbols aren't global, or on the stack, so we have to preserve or the
+       collector, thinking there are no refs, would deallocate them */
+    newSymb->gcMask |= ST_GC_MASK_PRESERVE;
+    newEntry->value = newSymb;
     if (!ST_BST_insert((ST_BST_Node **)&extCtx->symbolRegistry,
                        &newEntry->nodeHeader, ST_StringMap_comparator)) {
         ST_free(context, newEntry->key);
@@ -999,32 +1004,56 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
 // Array
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef struct ST_Array {
-    ST_Internal_Object object;
-    ST_Integer_Rep length;
-    ST_Object *data;
-} ST_Array;
-
-static ST_Object ST_Array_new(ST_Context context, ST_Object self,
+static ST_Object ST_Array_new(ST_Context ctx, ST_Object self,
                               ST_Object argv[]) {
-    ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
-    ST_Array *arr = (ST_Array *)ST_Class_makeInstance(context, self);
+    ST_Object rgetSymb = ST_requestSymbol(ctx, "rawGet");
+    ST_Object lengthParam = argv[0];
+    ST_Internal_Object *arr = ST_Class_makeInstance(ctx, self);
+    ST_Internal_Object **ivars = ST_Object_getIVars(arr);
+    ST_Integer_Rep lengthValue =
+        (intptr_t)ST_sendMessage(ctx, lengthParam, rgetSymb, 0, NULL);
+    ST_Object newSymb = ST_requestSymbol(ctx, "new");
+    ST_Object cNode = ST_getGlobal(ctx, ST_requestSymbol(ctx, "ListNode"));
+    ST_Object list = ST_getNilValue(ctx);
     ST_Integer_Rep i;
-    arr->length = (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
-    arr->data = ST_alloc(context, sizeof(ST_Object) * arr->length);
-    for (i = 0; i < arr->length; ++i) {
-        arr->data[i] = ST_getNilValue(context);
+    if (lengthValue <= 0) {
+        /* TODO: Raise error for zero length array? */
+        return ST_getNilValue(ctx);
     }
+    for (i = 0; i < lengthValue; ++i) {
+        ST_Object node = ST_sendMessage(ctx, cNode, newSymb, 0, NULL);
+        ST_Internal_Object **nodeVars = ST_Object_getIVars(node);
+        nodeVars[0] = list;
+        list = node;
+    }
+    ivars[0] = list;
+    /* TODO: implement clone method for int, or new method that takes a val */
+    ivars[1] =
+        ST_sendMessage(ctx, ST_getGlobal(ctx, ST_requestSymbol(ctx, "Integer")),
+                       newSymb, 0, NULL);
+    ST_sendMessage(ctx, ivars[1], ST_requestSymbol(ctx, "rawSet:"), 1,
+                   (ST_Object *)&lengthValue);
     return arr;
 }
 
 static ST_Object ST_Array_at(ST_Context context, ST_Object self,
                              ST_Object argv[]) {
     ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Internal_Object **ivars = ST_Object_getIVars(self);
     ST_Integer_Rep index =
         (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
-    if (index > -1 && index < ((ST_Array *)self)->length) {
-        return ((ST_Array *)self)->data[index];
+    ST_Integer_Rep length =
+        (intptr_t)ST_sendMessage(context, ivars[1], rgetSymb, 0, NULL);
+    if (index > -1 && index < length) {
+        ST_Integer_Rep i = 0;
+        ST_Object node = ivars[0];
+        while (true) {
+            if (i == index) {
+                return ST_Object_getIVars(node)[1];
+            }
+            ++i;
+            node = ST_Object_getIVars(node)[0];
+        }
     }
     return ST_getNilValue(context);
 }
@@ -1032,39 +1061,36 @@ static ST_Object ST_Array_at(ST_Context context, ST_Object self,
 static ST_Object ST_Array_set(ST_Context context, ST_Object self,
                               ST_Object argv[]) {
     ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Internal_Object **ivars = ST_Object_getIVars(self);
     ST_Integer_Rep index =
         (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
-    if (index > -1 && index < ((ST_Array *)self)->length) {
-        ((ST_Array *)self)->data[index] = argv[1];
+    ST_Integer_Rep length =
+        (intptr_t)ST_sendMessage(context, ivars[1], rgetSymb, 0, NULL);
+    if (index > -1 && index < length) {
+        ST_Integer_Rep i = 0;
+        ST_Object node = ivars[0];
+        while (true) {
+            if (i == index) {
+                ST_Object_getIVars(node)[1] = argv[1];
+                break;
+            }
+            ++i;
+            node = ST_Object_getIVars(node)[0];
+        }
     }
     return ST_getNilValue(context);
 }
 
 static ST_Object ST_Array_len(ST_Context context, ST_Object self,
                               ST_Object argv[]) {
-    ST_Object result = ST_NEW(context, "Integer");
-    ST_Object rawsetSymb = ST_requestSymbol(context, "rawSet:");
-    ST_Object rsetArgs[1];
-    rsetArgs[0] = (ST_Object)(intptr_t)((ST_Array *)self)->length;
-    ST_sendMessage(context, result, rawsetSymb, 1, rsetArgs);
-    return result;
-}
-
-static void ST_finalizeArray(ST_Context context, ST_Object object) {
-    ST_Array *array = object;
-    ST_free(context, array->data);
+    return ST_Object_getIVars(self)[1];
 }
 
 static void ST_initArray(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_requestSymbol(ctx, "Object"));
-    ST_Class *cArr = ST_Pool_alloc(ctx, &ctx->classPool);
-    cArr->instanceVariableCount = 0;
-    ST_Pool_init(ctx, &cArr->instancePool, sizeof(ST_Array), 64);
-    cArr->methodTree = NULL;
-    cArr->finalizer = ST_finalizeArray;
-    cArr->super = cObj;
-    cArr->object.class = cArr;
-    cArr->object.gcMask = ST_GC_MASK_ALIVE;
+    ST_Class *cArr = ST_Class_subclass(ctx, cObj, 2, 0, 10);
+    ST_Class *cNode = ST_Class_subclass(ctx, cObj, 2, 0, 64);
+    ST_setGlobal(ctx, ST_requestSymbol(ctx, "ListNode"), cNode);
     ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "length"), ST_Array_len, 0);
     ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "new:"), ST_Array_new, 1);
     ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "at:"), ST_Array_at, 1);
@@ -1080,11 +1106,28 @@ static void ST_initArray(ST_Internal_Context *ctx) {
 //
 /////////////////////////////////////////////////////////////////////////////*/
 
-void ST_GC_run(ST_Internal_Context *context) {}
+static void ST_GC_markObject(ST_Internal_Context *context,
+                             ST_Internal_Object *object) {
+    object->gcMask |= ST_GC_MASK_MARKED;
+    if (!ST_isClass(object)) {
+        ST_Internal_Object **ivars = ST_Object_getIVars(object);
+        ST_Size i;
+        for (i = 0; i < object->class->instanceVariableCount; ++i) {
+            ST_GC_markObject(context, ivars[i]);
+        }
+    }
+}
 
-void ST_GC_mark(ST_Internal_Context *context) {}
+static void ST_GC_mark(ST_Internal_Context *context) {
+    ST_Size opStackSize = ST_stackSize(context);
+    ST_Size i;
+    for (i = 0; i < opStackSize; ++i) {
+        ST_GC_markObject(context, ST_refStack(context, i));
+    }
+    /* TODO: mark gvars */
+}
 
-void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
+static void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
     ST_Internal_Object *obj = instanceMem;
     if (obj->gcMask & ST_GC_MASK_ALIVE) {
         if (obj->gcMask & (ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
@@ -1099,15 +1142,20 @@ void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
     }
 }
 
-void ST_GC_sweepVisitClass(ST_Context context, void *classMem) {
+static void ST_GC_sweepVisitClass(ST_Context context, void *classMem) {
     ST_Class *class = classMem;
     if (class->object.gcMask & ST_GC_MASK_ALIVE) {
         ST_Pool_scan(context, &class->instancePool, ST_GC_sweepVisitInstance);
     }
 }
 
-void ST_GC_sweep(ST_Internal_Context *context) {
+static void ST_GC_sweep(ST_Internal_Context *context) {
     ST_Pool_scan(context, &context->classPool, ST_GC_sweepVisitClass);
+}
+
+void ST_GC_run(ST_Internal_Context *context) {
+    ST_GC_mark(context);
+    ST_GC_sweep(context);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
