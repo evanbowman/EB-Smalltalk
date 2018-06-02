@@ -384,7 +384,7 @@ typedef struct ST_Class {
     struct ST_Class *super;
     ST_U16 instanceVariableCount;
     ST_Pool instancePool;
-    void (*finalizer)(ST_Object);
+    void (*finalizer)(ST_Context, ST_Object);
 } ST_Class;
 
 ST_U16 ST_getIVarCount(ST_Context context, ST_Object object) {
@@ -974,6 +974,7 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     cInt->instanceVariableCount = 0;
     ST_Pool_init(ctx, &cInt->instancePool, sizeof(ST_Integer), 128);
     cInt->methodTree = NULL;
+    cInt->finalizer = NULL;
     cInt->super = cObj;
     cInt->object.class = cInt;
     cInt->object.gcMask = ST_GC_MASK_ALIVE;
@@ -1043,12 +1044,18 @@ static ST_Object ST_Array_len(ST_Context context, ST_Object self,
     return result;
 }
 
+static void ST_finalizeArray(ST_Context context, ST_Object object) {
+    ST_Array *array = object;
+    ST_free(context, array->data);
+}
+
 static void ST_initArray(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_requestSymbol(ctx, "Object"));
     ST_Class *cArr = ST_Pool_alloc(ctx, &ctx->classPool);
     cArr->instanceVariableCount = 0;
     ST_Pool_init(ctx, &cArr->instancePool, sizeof(ST_Array), 64);
     cArr->methodTree = NULL;
+    cArr->finalizer = ST_finalizeArray;
     cArr->super = cObj;
     cArr->object.class = cArr;
     cArr->object.gcMask = ST_GC_MASK_ALIVE;
@@ -1079,7 +1086,7 @@ void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
             obj->gcMask &= ~ST_GC_MASK_MARKED;
         } else {
             if (obj->class->finalizer) {
-                obj->class->finalizer(obj);
+                obj->class->finalizer(context, obj);
             }
             ST_Pool_free(context, &obj->class->instancePool, obj);
         }
@@ -1158,6 +1165,7 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     cObject->object.class = cObject;
     cObject->super = cObject;
     cObject->methodTree = NULL;
+    cObject->finalizer = NULL;
     cObject->instanceVariableCount = 0;
     ST_Pool_init(context, &cObject->instancePool, sizeof(ST_Object), 10);
     cSymbol = ST_Class_subclass(context, cObject, 0, 0, 512);
