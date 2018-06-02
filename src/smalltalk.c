@@ -384,6 +384,7 @@ typedef struct ST_Class {
     struct ST_Class *super;
     ST_U16 instanceVariableCount;
     ST_Pool instancePool;
+    void (*finalizer)(ST_Object);
 } ST_Class;
 
 ST_U16 ST_getIVarCount(ST_Context context, ST_Object object) {
@@ -419,6 +420,7 @@ ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
     sub->instanceVariableCount =
         ((ST_Class *)class)->instanceVariableCount + instanceVariableCount;
     sub->methodTree = NULL;
+    sub->finalizer = NULL;
     ST_Pool_init(context, &sub->instancePool,
                  sizeof(ST_Internal_Object) +
                      sizeof(ST_Internal_Object *) * sub->instanceVariableCount,
@@ -1076,6 +1078,9 @@ void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
             obj->gcMask & ST_GC_MASK_PERSISTENT) {
             obj->gcMask &= ~ST_GC_MASK_MARKED;
         } else {
+            if (obj->class->finalizer) {
+                obj->class->finalizer(obj);
+            }
             ST_Pool_free(context, &obj->class->instancePool, obj);
         }
     }
@@ -1144,7 +1149,7 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
  symbol class and the new method, because most of the functions in
  the runtime depend on Symbol. */
     ST_Class *cObject = ST_Pool_alloc(context, &context->classPool);
-    ST_Class *cSymbol = ST_Pool_alloc(context, &context->classPool);
+    ST_Class *cSymbol;
     ST_Internal_Object *symbolSymbol;
     ST_Internal_Object *newSymbol;
     ST_StringMap_Entry *newEntry =
