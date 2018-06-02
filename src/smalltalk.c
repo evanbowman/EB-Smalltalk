@@ -17,6 +17,7 @@ static ST_Size ST_stackSize(struct ST_Internal_Context *context);
 /* Note: For the most part, only ST_Pool_alloc/free should call ST_alloc or
    ST_free directly. */
 static void *ST_alloc(ST_Context context, ST_Size size);
+static void ST_memset(ST_Context context, void *memory, int val, ST_Size n);
 static void ST_free(ST_Context context, void *memory);
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -105,6 +106,7 @@ static void ST_Pool_grow(ST_Context context, ST_Pool *pool, ST_Size count) {
     const ST_Size allocSize = poolNodeSize * count + headerSize;
     ST_U8 *mem = ST_alloc(context, allocSize);
     ST_Size i;
+    ST_memset(context, mem, 0, allocSize);
     pool->lastAllocCount = count;
     for (i = headerSize; i < allocSize; i += poolNodeSize) {
         ST_Pool_Node *node = (void *)(mem + i);
@@ -358,7 +360,7 @@ typedef struct ST_MethodMap_Entry {
 enum ST_GC_Mask {
     ST_GC_MASK_ALIVE = 1,
     ST_GC_MASK_MARKED = 1 << 1,
-    ST_GC_MASK_PERSISTENT = 1 << 2
+    ST_GC_MASK_PRESERVE = 1 << 2
 };
 
 typedef struct ST_Internal_Object {
@@ -565,6 +567,10 @@ static void *ST_alloc(ST_Context context, ST_Size size) {
 
 static void ST_free(ST_Context context, void *memory) {
     ((ST_Internal_Context *)context)->config.memory.freeFn(memory);
+}
+
+static void ST_memset(ST_Context context, void *memory, int val, ST_Size n) {
+    ((ST_Internal_Context *)context)->config.memory.setFn(memory, val, n);
 }
 
 typedef struct ST_StringMap_Entry {
@@ -1081,13 +1087,13 @@ void ST_GC_mark(ST_Internal_Context *context) {}
 void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
     ST_Internal_Object *obj = instanceMem;
     if (obj->gcMask & ST_GC_MASK_ALIVE) {
-        if (obj->gcMask & ST_GC_MASK_MARKED ||
-            obj->gcMask & ST_GC_MASK_PERSISTENT) {
+        if (obj->gcMask & (ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
             obj->gcMask &= ~ST_GC_MASK_MARKED;
         } else {
             if (obj->class->finalizer) {
                 obj->class->finalizer(context, obj);
             }
+            obj->gcMask = 0;
             ST_Pool_free(context, &obj->class->instancePool, obj);
         }
     }
