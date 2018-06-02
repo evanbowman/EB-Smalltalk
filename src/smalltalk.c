@@ -373,15 +373,15 @@ typedef struct ST_Internal_Object {
 } ST_Internal_Object;
 
 void ST_Object_setGCMask(ST_Object obj, enum ST_GC_Mask mask) {
-    ((ST_Internal_Object*)obj)->gcMask |= mask;
+    ((ST_Internal_Object *)obj)->gcMask |= mask;
 }
 
 void ST_Object_unsetGCMask(ST_Object obj, enum ST_GC_Mask mask) {
-    ((ST_Internal_Object*)obj)->gcMask &= ~mask;
+    ((ST_Internal_Object *)obj)->gcMask &= ~mask;
 }
 
 bool ST_Object_matchGCMask(ST_Object obj, enum ST_GC_Mask mask) {
-    return ((ST_Internal_Object*)obj)->gcMask & mask;
+    return ((ST_Internal_Object *)obj)->gcMask & mask;
 }
 
 static ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
@@ -398,7 +398,6 @@ typedef struct ST_Class {
     struct ST_Class *super;
     ST_U16 instanceVariableCount;
     ST_Pool instancePool;
-    void (*finalizer)(ST_Context, ST_Object);
 } ST_Class;
 
 ST_U16 ST_getIVarCount(ST_Context context, ST_Object object) {
@@ -434,7 +433,6 @@ ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
     sub->instanceVariableCount =
         ((ST_Class *)class)->instanceVariableCount + instanceVariableCount;
     sub->methodTree = NULL;
-    sub->finalizer = NULL;
     ST_Pool_init(context, &sub->instancePool,
                  sizeof(ST_Internal_Object) +
                      sizeof(ST_Internal_Object *) * sub->instanceVariableCount,
@@ -485,11 +483,7 @@ ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
         if (found) {
             return &((ST_MethodMap_Entry *)found)->method;
         } else {
-            /* Note: the current dummy implementation of metaclasses works
-         by having a class hold a circular reference to itself, so we
-         need to test self/super-equality before walking up the meta-class
-         hierarchy. */
-            if (currentClass->super != currentClass) {
+            if (currentClass->super) {
                 currentClass = currentClass->super;
             } else {
                 return NULL;
@@ -997,7 +991,6 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     cInt->instanceVariableCount = 0;
     ST_Pool_init(ctx, &cInt->instancePool, sizeof(ST_Integer), 128);
     cInt->methodTree = NULL;
-    cInt->finalizer = NULL;
     cInt->super = cObj;
     cInt->object.class = cInt;
     ST_Object_setGCMask(cInt, ST_GC_MASK_ALIVE);
@@ -1127,6 +1120,9 @@ static void ST_GC_markObject(ST_Internal_Context *context,
         for (i = 0; i < object->class->instanceVariableCount; ++i) {
             ST_GC_markObject(context, ivars[i]);
         }
+        ST_GC_markObject(context, (ST_Object)object->class);
+    } else /* We're a class */ {
+        /* TODO... */
     }
 }
 
@@ -1136,20 +1132,19 @@ static void ST_GC_mark(ST_Internal_Context *context) {
     for (i = 0; i < opStackSize; ++i) {
         ST_GC_markObject(context, ST_refStack(context, i));
     }
+
     /* TODO: mark gvars */
 }
 
 static void ST_GC_sweepVisitInstance(ST_Context context, void *instanceMem) {
     ST_Internal_Object *obj = instanceMem;
     if (ST_Object_matchGCMask(obj, ST_GC_MASK_ALIVE)) {
-        if (ST_Object_matchGCMask(obj, ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
+        if (ST_Object_matchGCMask(obj,
+                                  ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
             ST_Object_unsetGCMask(obj, ST_GC_MASK_MARKED);
         } else {
-            if (obj->class->finalizer) {
-                obj->class->finalizer(context, obj);
-            }
-            obj->gcMask = 0;
-            ST_Pool_free(context, &obj->class->instancePool, obj);
+            /* obj->gcMask = 0; */
+            /* ST_Pool_free(context, &obj->class->instancePool, obj); */
         }
     }
 }
@@ -1229,9 +1224,8 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
         ST_Pool_alloc(context, &context->strmapNodePool);
     ST_BST_Node_init((ST_BST_Node *)newEntry);
     cObject->object.class = cObject;
-    cObject->super = cObject;
+    cObject->super = NULL;
     cObject->methodTree = NULL;
-    cObject->finalizer = NULL;
     cObject->instanceVariableCount = 0;
     ST_Pool_init(context, &cObject->instancePool, sizeof(ST_Object), 10);
     cSymbol = ST_Class_subclass(context, cObject, 0, 0, 512);
@@ -1276,6 +1270,7 @@ static ST_Object ST_nopMethod(ST_Context context, ST_Object self,
 static void ST_initNil(ST_Internal_Context *context) {
     ST_SUBCLASS(context, "Object", "UndefinedObject");
     context->nilValue = ST_NEW(context, "UndefinedObject");
+    ST_Object_setGCMask(context->nilValue, ST_GC_MASK_PRESERVE);
 }
 
 static void ST_initBoolean(ST_Internal_Context *context) {
@@ -1288,6 +1283,8 @@ static void ST_initBoolean(ST_Internal_Context *context) {
     ST_SETMETHOD(context, "False", "ifTrue:", ST_nopMethod, 1);
     context->trueValue = ST_NEW(context, "True");
     context->falseValue = ST_NEW(context, "False");
+    ST_Object_setGCMask(context->trueValue, ST_GC_MASK_PRESERVE);
+    ST_Object_setGCMask(context->falseValue, ST_GC_MASK_PRESERVE);
 }
 
 ST_Context ST_createContext(const ST_Context_Configuration *config) {
