@@ -35,6 +35,8 @@ ST_Object ST_getClass(ST_Context context, ST_Object object);
 
 ST_Object ST_getSuper(ST_Context context, ST_Object object);
 
+void ST_GC_run(ST_Context context);
+
 typedef struct ST_Context_Configuration {
     struct Memory {
         void *(*allocFn)(size_t);
