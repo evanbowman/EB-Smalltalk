@@ -197,6 +197,7 @@ typedef struct ST_Internal_Context {
     ST_Pool methodNodePool;
     ST_Pool strmapNodePool;
     ST_Pool classPool;
+    bool gcDisabled;
 } ST_Internal_Context;
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -443,7 +444,7 @@ ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
     ST_Internal_Object **ivars = ST_Object_getIVars(instance);
     ST_Size i;
     for (i = 0; i < class->instanceVariableCount; ++i) {
-        ivars[i] = ST_getNilValue(context);
+        ivars[i] = ST_getNil(context);
     }
     instance->class = class;
     ST_Object_setGCMask(instance, ST_GC_MASK_ALIVE);
@@ -486,7 +487,7 @@ static bool ST_Object_hasIVar(ST_Context context, ST_Object object,
 
 ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position) {
     if (!ST_Object_hasIVar(context, object, position))
-        return ST_getNilValue(context);
+        return ST_getNil(context);
     return ST_Object_getIVars(object)[position];
 }
 
@@ -524,12 +525,12 @@ ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
 static void ST_failedMethodLookup(ST_Context context, ST_Object receiver,
                                   ST_Object selector) {
     ST_Object err = ST_NEW(context, "MessageNotUnderstood");
-    ST_sendMessage(context, receiver,
-                   ST_requestSymbol(context, "doesNotUnderstand:"), 1, &err);
+    ST_sendMsg(context, receiver, ST_symb(context, "doesNotUnderstand:"), 1,
+               &err);
 }
 
-ST_Object ST_sendMessage(ST_Context context, ST_Object receiver,
-                         ST_Object selector, ST_U8 argc, ST_Object argv[]) {
+ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object selector,
+                     ST_U8 argc, ST_Object argv[]) {
     ST_Internal_Method *method =
         ST_Internal_Object_getMethod(context, receiver, selector);
     if (method) {
@@ -537,7 +538,7 @@ ST_Object ST_sendMessage(ST_Context context, ST_Object receiver,
         case ST_METHOD_TYPE_PRIMITIVE:
             if (argc != method->argc) {
                 /* FIXME: wrong number of args */
-                return ST_getNilValue(context);
+                return ST_getNil(context);
             }
             return method->payload.primitiveMethod(context, receiver, argv);
 
@@ -559,7 +560,7 @@ ST_Object ST_sendMessage(ST_Context context, ST_Object receiver,
         }
     }
     ST_failedMethodLookup(context, receiver, selector);
-    return ST_getNilValue(context);
+    return ST_getNil(context);
 }
 
 static bool ST_Class_insertMethodEntry(ST_Context context, ST_Class *class,
@@ -653,7 +654,7 @@ ST_Object ST_getGlobal(ST_Context context, ST_Object symbol) {
     found = ST_BST_find(globalScope, &searchTmpl, ST_SymbolMap_comparator);
     if (UNEXPECTED(!found)) {
 
-        return ST_getNilValue(context);
+        return ST_getNil(context);
     }
     ST_BST_splay(globalScope, &symbol, ST_SymbolMap_comparator);
     return ((ST_GlobalVarMap_Entry *)found)->value;
@@ -671,19 +672,19 @@ void ST_setGlobal(ST_Context context, ST_Object symbol, ST_Object object) {
     }
 }
 
-ST_Object ST_getNilValue(ST_Context context) {
+ST_Object ST_getNil(ST_Context context) {
     return ((ST_Internal_Context *)context)->nilValue;
 }
 
-ST_Object ST_getTrueValue(ST_Context context) {
+ST_Object ST_getTrue(ST_Context context) {
     return ((ST_Internal_Context *)context)->trueValue;
 }
 
-ST_Object ST_getFalseValue(ST_Context context) {
+ST_Object ST_getFalse(ST_Context context) {
     return ((ST_Internal_Context *)context)->falseValue;
 }
 
-ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
+ST_Object ST_symb(ST_Context context, const char *symbolName) {
     ST_Internal_Context *extCtx = context;
     ST_BST_Node *found;
     ST_StringMap_Entry searchTmpl;
@@ -705,7 +706,7 @@ ST_Object ST_requestSymbol(ST_Context context, const char *symbolName) {
                        &newEntry->nodeHeader, ST_StringMap_comparator)) {
         ST_free(context, newEntry->key);
         ST_Pool_free(context, &extCtx->strmapNodePool, newEntry);
-        return ST_getNilValue(context);
+        return ST_getNil(context);
     }
     return newEntry->value;
 }
@@ -749,7 +750,7 @@ typedef enum ST_VM_Opcode {
     ST_VM_OP_PUSHTRUE,
     ST_VM_OP_PUSHFALSE,
     ST_VM_OP_PUSHSYMBOL,
-    ST_VM_OP_SENDMESSAGE,
+    ST_VM_OP_SENDMSG,
     ST_VM_OP_SETMETHOD,
     ST_VM_OP_RETURN,
     ST_VM_OP_GETIVAR,
@@ -830,17 +831,17 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
         } break;
 
         case ST_VM_OP_PUSHNIL:
-            ST_pushStack(context, ST_getNilValue(context));
+            ST_pushStack(context, ST_getNil(context));
             frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHTRUE:
-            ST_pushStack(context, ST_getTrueValue(context));
+            ST_pushStack(context, ST_getTrue(context));
             frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHFALSE:
-            ST_pushStack(context, ST_getFalseValue(context));
+            ST_pushStack(context, ST_getFalse(context));
             frame->ip += ST_OPCODE_SIZE;
             break;
 
@@ -849,7 +850,7 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
             break;
 
-        case ST_VM_OP_SENDMESSAGE: {
+        case ST_VM_OP_SENDMSG: {
             const ST_Object selector =
                 frame->code->symbTab[ST_readLE16(frame, 1)];
             ST_Object receiver = ST_refStack(context, 0);
@@ -965,7 +966,7 @@ static ST_Object ST_Integer_add(ST_Context ctx, ST_Object self,
                                 ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
-        return ST_getNilValue(ctx);
+        return ST_getNil(ctx);
     ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
     ret->value = ((ST_Integer *)self)->value + ((ST_Integer *)argv[0])->value;
     return ret;
@@ -975,7 +976,7 @@ static ST_Object ST_Integer_sub(ST_Context ctx, ST_Object self,
                                 ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
-        return ST_getNilValue(ctx);
+        return ST_getNil(ctx);
     ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
     ret->value = ((ST_Integer *)self)->value - ((ST_Integer *)argv[0])->value;
     return ret;
@@ -985,7 +986,7 @@ static ST_Object ST_Integer_mul(ST_Context ctx, ST_Object self,
                                 ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
-        return ST_getNilValue(ctx);
+        return ST_getNil(ctx);
     ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
     ret->value = ((ST_Integer *)self)->value * ((ST_Integer *)argv[0])->value;
     return ret;
@@ -995,7 +996,7 @@ static ST_Object ST_Integer_div(ST_Context ctx, ST_Object self,
                                 ST_Object argv[]) {
     ST_Integer *ret;
     if (!ST_Integer_typecheck(self, argv[0]))
-        return ST_getNilValue(ctx);
+        return ST_getNil(ctx);
     ret = (ST_Integer *)ST_Class_makeInstance(ctx, ST_getClass(ctx, self));
     ret->value = ((ST_Integer *)self)->value / ((ST_Integer *)argv[0])->value;
     return ret;
@@ -1009,11 +1010,11 @@ static ST_Object ST_Integer_rawGet(ST_Context context, ST_Object self,
 static ST_Object ST_Integer_rawSet(ST_Context context, ST_Object self,
                                    ST_Object argv[]) {
     ((ST_Integer *)self)->value = (ST_Integer_Rep)(intptr_t)argv[0];
-    return ST_getNilValue(context);
+    return ST_getNil(context);
 }
 
 static void ST_initInteger(ST_Internal_Context *ctx) {
-    ST_Class *cObj = ST_getGlobal(ctx, ST_requestSymbol(ctx, "Object"));
+    ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Class *cInt = ST_Pool_alloc(ctx, &ctx->classPool);
     cInt->instanceVariableCount = 0;
     ST_Pool_init(ctx, &cInt->instancePool, sizeof(ST_Integer), 128);
@@ -1021,15 +1022,13 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     cInt->super = cObj;
     cInt->object.class = cInt;
     ST_Object_setGCMask(cInt, ST_GC_MASK_ALIVE);
-    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "+"), ST_Integer_add, 1);
-    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "-"), ST_Integer_sub, 1);
-    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "*"), ST_Integer_mul, 1);
-    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "/"), ST_Integer_div, 1);
-    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "rawSet:"), ST_Integer_rawSet,
-                 1);
-    ST_setMethod(ctx, cInt, ST_requestSymbol(ctx, "rawGet"), ST_Integer_rawGet,
-                 0);
-    ST_setGlobal(ctx, ST_requestSymbol(ctx, "Integer"), cInt);
+    ST_setMethod(ctx, cInt, ST_symb(ctx, "+"), ST_Integer_add, 1);
+    ST_setMethod(ctx, cInt, ST_symb(ctx, "-"), ST_Integer_sub, 1);
+    ST_setMethod(ctx, cInt, ST_symb(ctx, "*"), ST_Integer_mul, 1);
+    ST_setMethod(ctx, cInt, ST_symb(ctx, "/"), ST_Integer_div, 1);
+    ST_setMethod(ctx, cInt, ST_symb(ctx, "rawSet:"), ST_Integer_rawSet, 1);
+    ST_setMethod(ctx, cInt, ST_symb(ctx, "rawGet"), ST_Integer_rawGet, 0);
+    ST_setGlobal(ctx, ST_symb(ctx, "Integer"), cInt);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -1038,44 +1037,43 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
 
 static ST_Object ST_Array_new(ST_Context ctx, ST_Object self,
                               ST_Object argv[]) {
-    ST_Object rgetSymb = ST_requestSymbol(ctx, "rawGet");
+    ST_Object rgetSymb = ST_symb(ctx, "rawGet");
     ST_Object lengthParam = argv[0];
     ST_Internal_Object *arr = ST_Class_makeInstance(ctx, self);
     ST_Internal_Object **ivars = ST_Object_getIVars(arr);
     ST_Integer_Rep lengthValue =
-        (intptr_t)ST_sendMessage(ctx, lengthParam, rgetSymb, 0, NULL);
-    ST_Object newSymb = ST_requestSymbol(ctx, "new");
-    ST_Object cNode = ST_getGlobal(ctx, ST_requestSymbol(ctx, "ListNode"));
-    ST_Object list = ST_getNilValue(ctx);
+        (intptr_t)ST_sendMsg(ctx, lengthParam, rgetSymb, 0, NULL);
+    ST_Object newSymb = ST_symb(ctx, "new");
+    ST_Object cNode = ST_getGlobal(ctx, ST_symb(ctx, "ListNode"));
+    ST_Object list = ST_getNil(ctx);
     ST_Integer_Rep i;
     if (lengthValue <= 0) {
         /* TODO: Raise error for zero length array? */
-        return ST_getNilValue(ctx);
+        return ST_getNil(ctx);
     }
     for (i = 0; i < lengthValue; ++i) {
-        ST_Object node = ST_sendMessage(ctx, cNode, newSymb, 0, NULL);
+        ST_Object node = ST_sendMsg(ctx, cNode, newSymb, 0, NULL);
         ST_Internal_Object **nodeVars = ST_Object_getIVars(node);
         nodeVars[0] = list;
         list = node;
     }
     ivars[0] = list;
     /* TODO: implement clone method for int, or new method that takes a val */
-    ivars[1] =
-        ST_sendMessage(ctx, ST_getGlobal(ctx, ST_requestSymbol(ctx, "Integer")),
-                       newSymb, 0, NULL);
-    ST_sendMessage(ctx, ivars[1], ST_requestSymbol(ctx, "rawSet:"), 1,
-                   (ST_Object *)&lengthValue);
+    ivars[1] = ST_sendMsg(ctx, ST_getGlobal(ctx, ST_symb(ctx, "Integer")),
+                          newSymb, 0, NULL);
+    ST_sendMsg(ctx, ivars[1], ST_symb(ctx, "rawSet:"), 1,
+               (ST_Object *)&lengthValue);
     return arr;
 }
 
 static ST_Object ST_Array_at(ST_Context context, ST_Object self,
                              ST_Object argv[]) {
-    ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Object rgetSymb = ST_symb(context, "rawGet");
     ST_Internal_Object **ivars = ST_Object_getIVars(self);
     ST_Integer_Rep index =
-        (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
+        (intptr_t)ST_sendMsg(context, argv[0], rgetSymb, 0, NULL);
     ST_Integer_Rep length =
-        (intptr_t)ST_sendMessage(context, ivars[1], rgetSymb, 0, NULL);
+        (intptr_t)ST_sendMsg(context, ivars[1], rgetSymb, 0, NULL);
     if (index > -1 && index < length) {
         ST_Integer_Rep i = 0;
         ST_Object node = ivars[0];
@@ -1087,17 +1085,17 @@ static ST_Object ST_Array_at(ST_Context context, ST_Object self,
             node = ST_Object_getIVars(node)[0];
         }
     }
-    return ST_getNilValue(context);
+    return ST_getNil(context);
 }
 
 static ST_Object ST_Array_set(ST_Context context, ST_Object self,
                               ST_Object argv[]) {
-    ST_Object rgetSymb = ST_requestSymbol(context, "rawGet");
+    ST_Object rgetSymb = ST_symb(context, "rawGet");
     ST_Internal_Object **ivars = ST_Object_getIVars(self);
     ST_Integer_Rep index =
-        (intptr_t)ST_sendMessage(context, argv[0], rgetSymb, 0, NULL);
+        (intptr_t)ST_sendMsg(context, argv[0], rgetSymb, 0, NULL);
     ST_Integer_Rep length =
-        (intptr_t)ST_sendMessage(context, ivars[1], rgetSymb, 0, NULL);
+        (intptr_t)ST_sendMsg(context, ivars[1], rgetSymb, 0, NULL);
     if (index > -1 && index < length) {
         ST_Integer_Rep i = 0;
         ST_Object node = ivars[0];
@@ -1110,7 +1108,7 @@ static ST_Object ST_Array_set(ST_Context context, ST_Object self,
             node = ST_Object_getIVars(node)[0];
         }
     }
-    return ST_getNilValue(context);
+    return ST_getNil(context);
 }
 
 static ST_Object ST_Array_len(ST_Context context, ST_Object self,
@@ -1119,15 +1117,15 @@ static ST_Object ST_Array_len(ST_Context context, ST_Object self,
 }
 
 static void ST_initArray(ST_Internal_Context *ctx) {
-    ST_Class *cObj = ST_getGlobal(ctx, ST_requestSymbol(ctx, "Object"));
+    ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Class *cArr = ST_Class_subclass(ctx, cObj, 2, 0, 10);
     ST_Class *cNode = ST_Class_subclass(ctx, cObj, 2, 0, 64);
-    ST_setGlobal(ctx, ST_requestSymbol(ctx, "ListNode"), cNode);
-    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "length"), ST_Array_len, 0);
-    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "new:"), ST_Array_new, 1);
-    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "at:"), ST_Array_at, 1);
-    ST_setMethod(ctx, cArr, ST_requestSymbol(ctx, "at:put:"), ST_Array_set, 2);
-    ST_setGlobal(ctx, ST_requestSymbol(ctx, "Array"), cArr);
+    ST_setGlobal(ctx, ST_symb(ctx, "ListNode"), cNode);
+    ST_setMethod(ctx, cArr, ST_symb(ctx, "length"), ST_Array_len, 0);
+    ST_setMethod(ctx, cArr, ST_symb(ctx, "new:"), ST_Array_new, 1);
+    ST_setMethod(ctx, cArr, ST_symb(ctx, "at:"), ST_Array_at, 1);
+    ST_setMethod(ctx, cArr, ST_symb(ctx, "at:put:"), ST_Array_set, 2);
+    ST_setGlobal(ctx, ST_symb(ctx, "Array"), cArr);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -1219,15 +1217,17 @@ static void ST_GC_sweep(ST_Internal_Context *context) {
 }
 
 void ST_GC_run(ST_Context context) {
-    ST_GC_mark(context);
-    ST_GC_sweep(context);
+    if (!((ST_Internal_Context *)context)->gcDisabled) {
+        ST_GC_mark(context);
+        ST_GC_sweep(context);
+    }
 }
 
-void ST_GC_preserve(ST_Object object) {
+void ST_GC_preserve(ST_Context context, ST_Object object) {
     ST_Object_setGCMask(object, ST_GC_MASK_PRESERVE);
 }
 
-void ST_GC_release(ST_Object object) {
+void ST_GC_release(ST_Context context, ST_Object object) {
     ST_Object_unsetGCMask(object, ST_GC_MASK_PRESERVE);
 }
 
@@ -1247,16 +1247,14 @@ static ST_Object ST_subclass(ST_Context context, ST_Object self,
 
 static ST_Object ST_subclassExtended(ST_Context context, ST_Object self,
                                      ST_Object argv[]) {
-    ST_Object rawgetSymb = ST_requestSymbol(context, "rawGet");
-    ST_Object lenSymb = ST_requestSymbol(context, "length");
-    ST_Object ivarNamesLength =
-        ST_sendMessage(context, argv[1], lenSymb, 0, NULL);
-    ST_Object cvarNamesLength =
-        ST_sendMessage(context, argv[2], lenSymb, 0, NULL);
+    ST_Object rawgetSymb = ST_symb(context, "rawGet");
+    ST_Object lenSymb = ST_symb(context, "length");
+    ST_Object ivarNamesLength = ST_sendMsg(context, argv[1], lenSymb, 0, NULL);
+    ST_Object cvarNamesLength = ST_sendMsg(context, argv[2], lenSymb, 0, NULL);
     ST_Integer_Rep ivarCount =
-        (intptr_t)ST_sendMessage(context, ivarNamesLength, rawgetSymb, 0, NULL);
+        (intptr_t)ST_sendMsg(context, ivarNamesLength, rawgetSymb, 0, NULL);
     ST_Integer_Rep cvarCount =
-        (intptr_t)ST_sendMessage(context, cvarNamesLength, rawgetSymb, 0, NULL);
+        (intptr_t)ST_sendMsg(context, cvarNamesLength, rawgetSymb, 0, NULL);
     return ST_Class_subclass(context, self, ivarCount, cvarCount, 4);
 }
 
@@ -1268,15 +1266,15 @@ static ST_Object ST_class(ST_Context context, ST_Object self,
 static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
                                       ST_Object argv[]) {
 
-    return ST_getNilValue(context);
+    return ST_getNil(context);
 }
 
 static void
 ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
-    ST_SUBCLASS(context, "Object", "MessageNotUnderstood");
+    ST_SUBCLASS(context, "Object", "MsgNotUnderstood");
     ST_SETMETHOD(context, "Object", "doesNotUnderstand:", ST_doesNotUnderstand,
                  1);
-    ST_SUBCLASS(context, "Object", "Message");
+    ST_SUBCLASS(context, "Object", "Msg");
 }
 
 static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
@@ -1313,25 +1311,25 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     ST_BST_insert((ST_BST_Node **)&context->symbolRegistry,
                   &newEntry->nodeHeader, ST_StringMap_comparator);
     ST_setMethod(context, cObject, newSymbol, ST_new, 0);
-    ST_setGlobal(context, ST_requestSymbol(context, "Object"), cObject);
+    ST_setGlobal(context, ST_symb(context, "Object"), cObject);
     return true;
 }
 
 static ST_Object ST_ifTrueImplForTrue(ST_Context context, ST_Object self,
                                       ST_Object argv[]) {
-    ST_Object valueSymbol = ST_requestSymbol(context, "value");
-    return ST_sendMessage(context, argv[0], valueSymbol, 0, NULL);
+    ST_Object valueSymbol = ST_symb(context, "value");
+    return ST_sendMsg(context, argv[0], valueSymbol, 0, NULL);
 }
 
 static ST_Object ST_ifFalseImplForFalse(ST_Context context, ST_Object self,
                                         ST_Object argv[]) {
-    ST_Object valueSymbol = ST_requestSymbol(context, "value");
-    return ST_sendMessage(context, argv[0], valueSymbol, 0, NULL);
+    ST_Object valueSymbol = ST_symb(context, "value");
+    return ST_sendMsg(context, argv[0], valueSymbol, 0, NULL);
 }
 
 static ST_Object ST_nopMethod(ST_Context context, ST_Object self,
                               ST_Object argv[]) {
-    return ST_getNilValue(context);
+    return ST_getNil(context);
 }
 
 static void ST_initNil(ST_Internal_Context *context) {

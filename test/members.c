@@ -7,49 +7,47 @@ int main() {
     ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
     ST_Context context = ST_createContext(&config);
 
-    ST_Object objSymb = ST_requestSymbol(context, "Object");
-    ST_Object arrnewSymb = ST_requestSymbol(context, "new:");
-    ST_Object newSymb = ST_requestSymbol(context, "new");
-    ST_Object rsetSymb = ST_requestSymbol(context, "rawSet:");
+    ST_Object objSymb = ST_symb(context, "Object");
+    ST_Object arrnewSymb = ST_symb(context, "new:");
+    ST_Object newSymb = ST_symb(context, "new");
+    ST_Object rsetSymb = ST_symb(context, "rawSet:");
 
     ST_Object cObject = ST_getGlobal(context, objSymb);
-    ST_Object cInt =
-        ST_getGlobal(context, ST_requestSymbol(context, "Integer"));
-    ST_Object cArr = ST_getGlobal(context, ST_requestSymbol(context, "Array"));
+    ST_Object cInt = ST_getGlobal(context, ST_symb(context, "Integer"));
+    ST_Object cArr = ST_getGlobal(context, ST_symb(context, "Array"));
 
     ST_Object ivarNames, cvarNames;
 
     ST_Object subc;
     ST_Object subcInst;
 
-    ST_Object integer = ST_sendMessage(context, cInt, newSymb, 0, NULL);
+    ST_Object integer = ST_sendMsg(context, cInt, newSymb, 0, NULL);
     ST_Object argv[3];
     argv[0] = (ST_Object)1;
-    ST_sendMessage(context, integer, rsetSymb, 1, argv);
+    ST_sendMsg(context, integer, rsetSymb, 1, argv);
 
     argv[0] = integer;
-    ivarNames = ST_sendMessage(context, cArr, arrnewSymb, 1, argv);
-    cvarNames = ST_sendMessage(context, cArr, arrnewSymb, 1, argv);
+    ivarNames = ST_sendMsg(context, cArr, arrnewSymb, 1, argv);
+    cvarNames = ST_sendMsg(context, cArr, arrnewSymb, 1, argv);
 
-    argv[0] = ST_getNilValue(context);
+    argv[0] = ST_getNil(context);
     argv[1] = ivarNames;
     argv[2] = cvarNames;
-    subc = ST_sendMessage(
+    subc = ST_sendMsg(
         context, cObject,
-        ST_requestSymbol(context,
-                         "subclass:instanceVariableNames:classVariableNames:"),
+        ST_symb(context, "subclass:instanceVariableNames:classVariableNames:"),
         3, argv);
 
-    subcInst = ST_sendMessage(context, subc, newSymb, 0, NULL);
+    subcInst = ST_sendMsg(context, subc, newSymb, 0, NULL);
 
-    ST_setIVar(context, subcInst, 0, ST_getTrueValue(context));
+    ST_setIVar(context, subcInst, 0, ST_getTrue(context));
 
     if (ST_getIVarCount(context, subcInst) != 1) {
         puts("failed to allocate slot for instance variable");
         return EXIT_FAILURE;
     }
 
-    if (ST_getIVar(context, subcInst, 0) != ST_getTrueValue(context)) {
+    if (ST_getIVar(context, subcInst, 0) != ST_getTrue(context)) {
         puts("failed to set instance variable");
         return EXIT_FAILURE;
     }
