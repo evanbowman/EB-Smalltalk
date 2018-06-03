@@ -3,10 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-int main() {
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
-    ST_Context context = ST_createContext(&config);
-
+int testArray(ST_Context context) {
     ST_Object arrnewSymb = ST_symb(context, "new:");
     ST_Object newSymb = ST_symb(context, "new");
     ST_Object rsetSymb = ST_symb(context, "rawSet:");
@@ -61,4 +58,11 @@ int main() {
     }
 
     return EXIT_SUCCESS;
+}
+
+int main() {
+    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
+    ST_Context context = ST_createContext(&config);
+    ST_GC_pause(context);
+    return testArray(context);
 }

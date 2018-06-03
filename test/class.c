@@ -2,9 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-int main() {
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
-    ST_Context context = ST_createContext(&config);
+int testClass(ST_Context context) {
     ST_Object objSymb = ST_symb(context, "Object");
     ST_Object subcSymb = ST_symb(context, "subclass");
     ST_Object classSymb = ST_symb(context, "class");
@@ -25,4 +23,11 @@ int main() {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
+}
+
+int main() {
+    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
+    ST_Context context = ST_createContext(&config);
+    ST_GC_pause(context);
+    return testClass(context);
 }

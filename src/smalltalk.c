@@ -197,7 +197,7 @@ typedef struct ST_Internal_Context {
     ST_Pool methodNodePool;
     ST_Pool strmapNodePool;
     ST_Pool classPool;
-    bool gcDisabled;
+    bool gcPaused;
 } ST_Internal_Context;
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -1217,7 +1217,7 @@ static void ST_GC_sweep(ST_Internal_Context *context) {
 }
 
 void ST_GC_run(ST_Context context) {
-    if (!((ST_Internal_Context *)context)->gcDisabled) {
+    if (!((ST_Internal_Context *)context)->gcPaused) {
         ST_GC_mark(context);
         ST_GC_sweep(context);
     }
@@ -1229,6 +1229,14 @@ void ST_GC_preserve(ST_Context context, ST_Object object) {
 
 void ST_GC_release(ST_Context context, ST_Object object) {
     ST_Object_unsetGCMask(object, ST_GC_MASK_PRESERVE);
+}
+
+void ST_GC_pause(ST_Context context) {
+    ((ST_Internal_Context *)context)->gcPaused = true;
+}
+
+void ST_GC_resume(ST_Context context) {
+    ((ST_Internal_Context *)context)->gcPaused = false;
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -1358,6 +1366,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     if (!ctx)
         return NULL;
     ctx->config = *config;
+    ctx->gcPaused = false;
     ST_Pool_init(ctx, &ctx->gvarNodePool, sizeof(ST_GlobalVarMap_Entry), 100);
     ST_Pool_init(ctx, &ctx->vmFramePool, sizeof(ST_VM_Frame), 50);
     ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 512);

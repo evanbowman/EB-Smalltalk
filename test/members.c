@@ -3,10 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-int main() {
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
-    ST_Context context = ST_createContext(&config);
-
+int testMembers(ST_Context context) {
     ST_Object objSymb = ST_symb(context, "Object");
     ST_Object arrnewSymb = ST_symb(context, "new:");
     ST_Object newSymb = ST_symb(context, "new");
@@ -51,6 +48,12 @@ int main() {
         puts("failed to set instance variable");
         return EXIT_FAILURE;
     }
-
     return EXIT_SUCCESS;
+}
+
+int main() {
+    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
+    ST_Context context = ST_createContext(&config);
+    ST_GC_pause(context);
+    return testMembers(context);
 }
