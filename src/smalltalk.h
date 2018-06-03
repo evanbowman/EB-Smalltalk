@@ -17,25 +17,24 @@ typedef unsigned char ST_U8;
 typedef uint16_t ST_U16;
 typedef uint32_t ST_U32;
 
-typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
 ST_Object ST_sendMessage(ST_Context context, ST_Object receiver,
                          ST_Object selector, ST_U8 argc, ST_Object argv[]);
 
+typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
 void ST_setMethod(ST_Context context, ST_Object targetClass, ST_Object selector,
                   ST_Method method, ST_U8 argc);
 
 ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position);
-
 void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
                 ST_Object value);
 
 ST_U16 ST_getIVarCount(ST_Context context, ST_Object object);
-
 ST_Object ST_getClass(ST_Context context, ST_Object object);
-
 ST_Object ST_getSuper(ST_Context context, ST_Object object);
 
 void ST_GC_run(ST_Context context);
+void ST_GC_preserve(ST_Object object);
+void ST_GC_release(ST_Object object);
 
 typedef struct ST_Context_Configuration {
     struct Memory {
@@ -48,21 +47,16 @@ typedef struct ST_Context_Configuration {
 } ST_Context_Configuration;
 
 ST_Context ST_createContext(const ST_Context_Configuration *config);
-
 void ST_destroyContext(ST_Context context);
 
 ST_Object ST_requestSymbol(ST_Context context, const char *symbolName);
-
 const char *ST_Symbol_toString(ST_Context context, ST_Object symbol);
 
 void ST_setGlobal(ST_Context context, ST_Object symbol, ST_Object value);
-
 ST_Object ST_getGlobal(ST_Context context, ST_Object symbol);
 
 ST_Object ST_getNilValue(ST_Context context);
-
 ST_Object ST_getTrueValue(ST_Context context);
-
 ST_Object ST_getFalseValue(ST_Context context);
 
 typedef struct ST_Code {

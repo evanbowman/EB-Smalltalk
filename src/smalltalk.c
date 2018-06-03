@@ -1223,6 +1223,14 @@ void ST_GC_run(ST_Context context) {
     ST_GC_sweep(context);
 }
 
+void ST_GC_preserve(ST_Object object) {
+    ST_Object_setGCMask(object, ST_GC_MASK_PRESERVE);
+}
+
+void ST_GC_release(ST_Object object) {
+    ST_Object_unsetGCMask(object, ST_GC_MASK_PRESERVE);
+}
+
 /*//////////////////////////////////////////////////////////////////////////////
 // Language types and methods
 /////////////////////////////////////////////////////////////////////////////*/
