@@ -22,11 +22,11 @@ ST_Object ST_symb(ST_Context context, const char *symbolName);
 void ST_setGlobal(ST_Context context, ST_Object symbol, ST_Object value);
 ST_Object ST_getGlobal(ST_Context context, ST_Object symbol);
 
-ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object selector,
+ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object symbol,
                      ST_U8 argc, ST_Object argv[]);
 
 typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
-void ST_setMethod(ST_Context context, ST_Object targetClass, ST_Object selector,
+void ST_setMethod(ST_Context context, ST_Object targetClass, ST_Object symbol,
                   ST_Method method, ST_U8 argc);
 
 ST_U16 ST_getIVarCount(ST_Context context, ST_Object object);

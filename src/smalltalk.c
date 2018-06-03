@@ -502,12 +502,12 @@ void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
 
 static ST_Internal_Method *
 ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
-                             ST_Internal_Object *selector) {
+                             ST_Internal_Object *symbol) {
     ST_Class *currentClass = obj->class;
     while (true) {
         ST_SymbolMap_Entry searchTmpl;
         ST_BST_Node *found;
-        searchTmpl.symbol = selector;
+        searchTmpl.symbol = symbol;
         found = ST_BST_find((ST_BST_Node **)&currentClass->methodTree,
                             &searchTmpl, ST_SymbolMap_comparator);
         if (found) {
@@ -523,16 +523,16 @@ ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
 }
 
 static void ST_failedMethodLookup(ST_Context context, ST_Object receiver,
-                                  ST_Object selector) {
+                                  ST_Object symbol) {
     ST_Object err = ST_NEW(context, "MessageNotUnderstood");
     ST_sendMsg(context, receiver, ST_symb(context, "doesNotUnderstand:"), 1,
                &err);
 }
 
-ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object selector,
+ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object symbol,
                      ST_U8 argc, ST_Object argv[]) {
     ST_Internal_Method *method =
-        ST_Internal_Object_getMethod(context, receiver, selector);
+        ST_Internal_Object_getMethod(context, receiver, symbol);
     if (method) {
         switch (method->type) {
         case ST_METHOD_TYPE_PRIMITIVE:
@@ -559,7 +559,7 @@ ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object selector,
         }
         }
     }
-    ST_failedMethodLookup(context, receiver, selector);
+    ST_failedMethodLookup(context, receiver, symbol);
     return ST_getNil(context);
 }
 
@@ -574,12 +574,12 @@ static bool ST_Class_insertMethodEntry(ST_Context context, ST_Class *class,
     return true;
 }
 
-void ST_setMethod(ST_Context context, ST_Object object, ST_Object selector,
+void ST_setMethod(ST_Context context, ST_Object object, ST_Object symbol,
                   ST_PrimitiveMethod primitiveMethod, ST_U8 argc) {
     ST_Pool *methodPool = &((ST_Internal_Context *)context)->methodNodePool;
     ST_MethodMap_Entry *entry = ST_Pool_alloc(context, methodPool);
     ST_BST_Node_init((ST_BST_Node *)entry);
-    entry->header.symbol = selector;
+    entry->header.symbol = symbol;
     entry->method.type = ST_METHOD_TYPE_PRIMITIVE;
     entry->method.payload.primitiveMethod = primitiveMethod;
     entry->method.argc = argc;
@@ -851,11 +851,11 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
             break;
 
         case ST_VM_OP_SENDMSG: {
-            const ST_Object selector =
+            const ST_Object symbol =
                 frame->code->symbTab[ST_readLE16(frame, 1)];
             ST_Object receiver = ST_refStack(context, 0);
             ST_Internal_Method *method =
-                ST_Internal_Object_getMethod(context, receiver, selector);
+                ST_Internal_Object_getMethod(context, receiver, symbol);
             frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
             if (method) {
                 switch (method->type) {
@@ -875,12 +875,12 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
                 } break;
                 }
             } else {
-                ST_failedMethodLookup(context, receiver, selector);
+                ST_failedMethodLookup(context, receiver, symbol);
             }
         } break;
 
         case ST_VM_OP_SETMETHOD: {
-            const ST_Object selector =
+            const ST_Object symbol =
                 frame->code->symbTab[ST_readLE16(frame, 1)];
             const ST_Object target = ST_refStack(context, 0);
             const ST_U8 argc = frame->code->instructions[frame->ip + 3];
@@ -888,7 +888,7 @@ static void ST_Internal_VM_execute(ST_Internal_Context *context,
                 ST_Pool_alloc(context, &context->methodNodePool);
             ST_BST_Node_init((ST_BST_Node *)entry);
             frame->ip += sizeof(ST_U8) + sizeof(ST_U16);
-            entry->header.symbol = selector;
+            entry->header.symbol = symbol;
             entry->method.type = ST_METHOD_TYPE_COMPILED;
             entry->method.argc = argc;
             entry->method.payload.compiledMethod.source = frame->code;
