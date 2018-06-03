@@ -287,6 +287,63 @@ static bool ST_BST_insert(ST_BST_Node **root, ST_BST_Node *node,
     };
 }
 
+static ST_BST_Node *ST_BST_remove(ST_BST_Node **root, void *key,
+                                  ST_Cmp (*comp)(void *, void *)) {
+    ST_BST_Node *current = *root;
+    ST_BST_Node **backlink = root;
+    if (UNEXPECTED(!current)) {
+        return NULL;
+    }
+    while (true) {
+        switch (comp(current, key)) {
+        case ST_Cmp_Eq:
+            if (!current->left && !current->right) {
+                *backlink = NULL;
+            } else if (current->left && !current->right) {
+                *backlink = current->left;
+            } else if (!current->left && current->right) {
+                *backlink = current->right;
+            } else {
+                /* Note: this is the common BST node deletion algorithm, except
+                   we don't have direct access to a node's key or value, so we
+                   have to swap the nodes themselves and update references in
+                   the tree instead of swapping the current key with the left
+                   subtree max. */
+                ST_BST_Node **maxBacklink = &current->left;
+                ST_BST_Node *max = current->left;
+                while (max->right) {
+                    maxBacklink = &max->right;
+                    max = max->right;
+                }
+                *max = *current;
+                *backlink = max;
+                /* Note: if the current node swapped with its child, the
+                   backlink is now invalid and needs to be set to point back
+                   at the parent's left subtree. */
+                if (maxBacklink == &current->left) {
+                    maxBacklink = &max->left;
+                }
+                *maxBacklink = NULL;
+            }
+            return current;
+        case ST_Cmp_Greater:
+            if (current->left) {
+                backlink = &current->left;
+                current = current->left;
+                break;
+            } else
+                return NULL;
+        case ST_Cmp_Less:
+            if (current->right) {
+                backlink = &current->right;
+                current = current->right;
+                break;
+            } else
+                return NULL;
+        }
+    }
+}
+
 static ST_BST_Node *ST_BST_find(ST_BST_Node **root, void *key,
                                 ST_Cmp (*comp)(void *, void *)) {
     ST_BST_Node *current = *root;
@@ -653,7 +710,6 @@ ST_Object ST_getGlobal(ST_Context context, ST_Object symbol) {
     searchTmpl.symbol = symbol;
     found = ST_BST_find(globalScope, &searchTmpl, ST_SymbolMap_comparator);
     if (UNEXPECTED(!found)) {
-
         return ST_getNil(context);
     }
     ST_BST_splay(globalScope, &symbol, ST_SymbolMap_comparator);
@@ -661,14 +717,28 @@ ST_Object ST_getGlobal(ST_Context context, ST_Object symbol) {
 }
 
 void ST_setGlobal(ST_Context context, ST_Object symbol, ST_Object object) {
-    ST_Internal_Context *ctx = context;
-    ST_GlobalVarMap_Entry *entry = ST_Pool_alloc(ctx, &ctx->gvarNodePool);
-    ST_BST_Node_init((ST_BST_Node *)entry);
-    entry->header.symbol = symbol;
-    entry->value = object;
-    if (!ST_BST_insert((ST_BST_Node **)&ctx->globalScope, &entry->header.node,
-                       ST_SymbolMap_comparator)) {
-        ST_Pool_free(context, &ctx->gvarNodePool, entry);
+    ST_Internal_Context *ctxImpl = context;
+    ST_SymbolMap_Entry searchTmpl;
+    ST_BST_Node *found;
+    searchTmpl.symbol = symbol;
+    if (UNEXPECTED(object == ST_getNil(context))) {
+        ST_BST_Node *removed =
+            ST_BST_remove((ST_BST_Node **)&ctxImpl->globalScope, &searchTmpl,
+                          ST_SymbolMap_comparator);
+        ST_Pool_free(context, &ctxImpl->gvarNodePool, removed);
+    } else if ((found = ST_BST_find((ST_BST_Node **)&ctxImpl->globalScope,
+                                    &searchTmpl, ST_SymbolMap_comparator))) {
+        ((ST_GlobalVarMap_Entry *)found)->value = object;
+    } else {
+        ST_GlobalVarMap_Entry *entry =
+            ST_Pool_alloc(ctxImpl, &ctxImpl->gvarNodePool);
+        ST_BST_Node_init((ST_BST_Node *)entry);
+        entry->header.symbol = symbol;
+        entry->value = object;
+        if (!ST_BST_insert((ST_BST_Node **)&ctxImpl->globalScope,
+                           &entry->header.node, ST_SymbolMap_comparator)) {
+            ST_Pool_free(context, &ctxImpl->gvarNodePool, entry);
+        }
     }
 }
 
@@ -1279,10 +1349,10 @@ static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
 
 static void
 ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
-    ST_SUBCLASS(context, "Object", "MsgNotUnderstood");
+    ST_SUBCLASS(context, "Object", "MessageNotUnderstood");
     ST_SETMETHOD(context, "Object", "doesNotUnderstand:", ST_doesNotUnderstand,
                  1);
-    ST_SUBCLASS(context, "Object", "Msg");
+    ST_SUBCLASS(context, "Object", "Message");
 }
 
 static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
@@ -1366,7 +1436,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     if (!ctx)
         return NULL;
     ctx->config = *config;
-    ctx->gcPaused = false;
+    ST_GC_pause(ctx);
     ST_Pool_init(ctx, &ctx->gvarNodePool, sizeof(ST_GlobalVarMap_Entry), 100);
     ST_Pool_init(ctx, &ctx->vmFramePool, sizeof(ST_VM_Frame), 50);
     ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 512);
@@ -1387,11 +1457,18 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_Internal_Context_initErrorHandling(ctx);
     ST_initInteger(ctx);
     ST_initArray(ctx);
+    ST_GC_resume(ctx);
     return ctx;
 }
 
 void ST_destroyContext(const ST_Context context) {
     ST_Internal_Context *ctxImpl = context;
+    while (ctxImpl->globalScope) {
+        ST_BST_Node *removedGVar =
+            ST_BST_remove((ST_BST_Node **)&ctxImpl->globalScope,
+                          ctxImpl->globalScope, ST_SymbolMap_comparator);
+        ST_Pool_free(context, &ctxImpl->gvarNodePool, removedGVar);
+    }
     /* TODO: lots of stuff */
     ST_GC_run(context);
     ST_free(context, ctxImpl->operandStack.base);
@@ -1400,4 +1477,5 @@ void ST_destroyContext(const ST_Context context) {
     ST_Pool_release(context, &ctxImpl->methodNodePool);
     ST_Pool_release(context, &ctxImpl->strmapNodePool);
     ST_Pool_release(context, &ctxImpl->classPool);
+    ST_free(context, context);
 }
