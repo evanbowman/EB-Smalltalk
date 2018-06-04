@@ -1263,6 +1263,12 @@ static void ST_GC_sweepVisitClass(ST_Visitor *visitor, void *classMem) {
                                   ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
             ST_Object_unsetGCMask(class, ST_GC_MASK_MARKED);
         } else {
+            while (class->methodTree) {
+                ST_BST_Node *removed =
+                    ST_BST_remove((ST_BST_Node **)&class->methodTree,
+                                  class->methodTree, ST_SymbolMap_comparator);
+                ST_Pool_free(context, &context->methodNodePool, removed);
+            }
             class->object.gcMask = 0;
             ST_Pool_release(context, &class->instancePool);
             /* FIXME: free class methods! */
@@ -1421,6 +1427,16 @@ static void ST_initBoolean(ST_Internal_Context *context) {
     ST_Object_setGCMask(context->falseValue, ST_GC_MASK_PRESERVE);
 }
 
+static void ST_initObject(ST_Internal_Context *context) {
+    ST_Object cObj = ST_getGlobal(context, ST_symb(context, "Object"));
+    ST_setMethod(context, cObj, ST_symb(context, "subclass"), ST_subclass, 0);
+    ST_setMethod(context, cObj, ST_symb(context, "class"), ST_class, 0);
+    ST_setMethod(
+        context, cObj,
+        ST_symb(context, "subclass:instanceVariableNames:classVariableNames:"),
+        ST_subclassExtended, 3);
+}
+
 ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_Internal_Context *ctx =
         config->memory.allocFn(sizeof(ST_Internal_Context));
@@ -1433,16 +1449,12 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 512);
     ST_Pool_init(ctx, &ctx->strmapNodePool, sizeof(ST_StringMap_Entry), 512);
     ST_Pool_init(ctx, &ctx->classPool, sizeof(ST_Class), 100);
-    ST_Internal_Context_bootstrap(ctx);
     ctx->operandStack.base = ST_alloc(ctx, sizeof(ST_Internal_Object *) *
                                                config->memory.stackCapacity);
     ctx->operandStack.top =
         (struct ST_Internal_Object **)ctx->operandStack.base;
-    ST_SETMETHOD(ctx, "Object", "subclass", ST_subclass, 0);
-    ST_SETMETHOD(ctx, "Object",
-                 "subclass:instanceVariableNames:classVariableNames:",
-                 ST_subclassExtended, 3);
-    ST_SETMETHOD(ctx, "Object", "class", ST_class, 0);
+    ST_Internal_Context_bootstrap(ctx);
+    ST_initObject(ctx);
     ST_initNil(ctx);
     ST_initBoolean(ctx);
     ST_Internal_Context_initErrorHandling(ctx);
