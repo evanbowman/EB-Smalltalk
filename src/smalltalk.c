@@ -304,26 +304,20 @@ static ST_BST_Node *ST_BST_remove(ST_BST_Node **root, void *key,
             } else if (!current->left && current->right) {
                 *backlink = current->right;
             } else {
-                /* Note: this is the common BST node deletion algorithm, except
-                   we don't have direct access to a node's key or value, so we
-                   have to swap the nodes themselves and update references in
-                   the tree instead of swapping the current key with the left
-                   subtree max. */
                 ST_BST_Node **maxBacklink = &current->left;
                 ST_BST_Node *max = current->left;
+                ST_BST_Node temp;
                 while (max->right) {
                     maxBacklink = &max->right;
                     max = max->right;
                 }
+                temp = *max;
                 *max = *current;
                 *backlink = max;
-                /* Note: if the current node swapped with its child, the
-                   backlink is now invalid and needs to be set to point back
-                   at the parent's left subtree. */
                 if (maxBacklink == &current->left) {
                     maxBacklink = &max->left;
                 }
-                *maxBacklink = NULL;
+                *maxBacklink = temp.left;
             }
             return current;
         case ST_Cmp_Greater:
@@ -1343,7 +1337,6 @@ static ST_Object ST_class(ST_Context context, ST_Object self,
 
 static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
                                       ST_Object argv[]) {
-
     return ST_getNil(context);
 }
 
@@ -1461,7 +1454,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     return ctx;
 }
 
-void ST_destroyContext(const ST_Context context) {
+void ST_destroyContext(ST_Context context) {
     ST_Internal_Context *ctxImpl = context;
     while (ctxImpl->globalScope) {
         ST_BST_Node *removedGVar =
@@ -1469,7 +1462,19 @@ void ST_destroyContext(const ST_Context context) {
                           ctxImpl->globalScope, ST_SymbolMap_comparator);
         ST_Pool_free(context, &ctxImpl->gvarNodePool, removedGVar);
     }
-    /* TODO: lots of stuff */
+    while (ctxImpl->symbolRegistry) {
+        ST_StringMap_Entry *removedSymb = (ST_StringMap_Entry *)ST_BST_remove(
+            (ST_BST_Node **)&ctxImpl->symbolRegistry, ctxImpl->symbolRegistry,
+            ST_StringMap_comparator);
+        ST_Object_unsetGCMask(removedSymb->value, ST_GC_MASK_PRESERVE);
+        ST_free(context, removedSymb->key);
+        ST_Pool_free(context, &ctxImpl->strmapNodePool, removedSymb);
+    }
+    ST_Object_unsetGCMask(ctxImpl->nilValue, ST_GC_MASK_PRESERVE);
+    ST_Object_unsetGCMask(ctxImpl->trueValue, ST_GC_MASK_PRESERVE);
+    ST_Object_unsetGCMask(ctxImpl->falseValue, ST_GC_MASK_PRESERVE);
+    ctxImpl->operandStack.top =
+        (struct ST_Internal_Object **)ctxImpl->operandStack.base;
     ST_GC_run(context);
     ST_free(context, ctxImpl->operandStack.base);
     ST_Pool_release(context, &ctxImpl->gvarNodePool);
