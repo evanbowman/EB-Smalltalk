@@ -775,32 +775,30 @@ ST_Object ST_symb(ST_Context context, const char *symbolName) {
     return newEntry->value;
 }
 
-static const char *ST_recDecodeSymbol(ST_StringMap_Entry *tree,
-                                      ST_Object symbol) {
-    if ((ST_Object)tree->value == symbol)
-        return tree->key;
-    if (tree->nodeHeader.left) {
-        const char *found = ST_recDecodeSymbol(
-            ((ST_StringMap_Entry *)tree->nodeHeader.left), symbol);
-        if (found)
-            return found;
+typedef struct ST_SymbolNameByValueVisitor {
+    ST_Visitor visitor;
+    ST_Object key;
+    const char *result;
+} ST_SymbolNameByValueVisitor;
+
+static void ST_findSymbolNameByValue(ST_Visitor *visitor, void *mapNode) {
+    ST_StringMap_Entry *nodeImpl = (ST_StringMap_Entry *)mapNode;
+    ST_SymbolNameByValueVisitor *visitorImpl =
+        (ST_SymbolNameByValueVisitor *)visitor;
+    if (visitorImpl->key == nodeImpl->value) {
+        visitorImpl->result = nodeImpl->key;
     }
-    if (tree->nodeHeader.right) {
-        const char *found = ST_recDecodeSymbol(
-            ((ST_StringMap_Entry *)tree->nodeHeader.right), symbol);
-        if (found)
-            return found;
-    }
-    return NULL;
 }
 
 const char *ST_Symbol_toString(ST_Context context, ST_Object symbol) {
-    ST_Internal_Context *ctx = context;
-    ST_StringMap_Entry *symbolRegistry = ctx->symbolRegistry;
-    if (symbolRegistry) {
-        return ST_recDecodeSymbol(symbolRegistry, symbol);
-    }
-    return NULL;
+    ST_SymbolNameByValueVisitor visitor;
+    visitor.visitor.visit = ST_findSymbolNameByValue;
+    visitor.key = symbol;
+    visitor.result = NULL;
+    ST_BST_traverse(
+        (ST_BST_Node *)((ST_Internal_Context *)context)->symbolRegistry,
+        (ST_Visitor *)&visitor);
+    return visitor.result;
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
