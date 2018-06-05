@@ -29,11 +29,6 @@ typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
 void ST_setMethod(ST_Context context, ST_Object targetClass, ST_Object symbol,
                   ST_Method method, ST_U8 argc);
 
-ST_U16 ST_getIVarCount(ST_Context context, ST_Object object);
-ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position);
-void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
-                ST_Object value);
-
 ST_Object ST_getClass(ST_Context context, ST_Object object);
 ST_Object ST_getSuper(ST_Context context, ST_Object object);
 ST_Object ST_getNil(ST_Context context);
@@ -74,29 +69,6 @@ typedef struct ST_Code {
 } ST_Code;
 
 void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
-
-/* Shortcuts for some common stuff. Not super efficient compared to caching
-   the symbols and globals up front if you're calling a method repeatedly. */
-
-#define ST_UNARYSEND(CONTEXT, OBJ, MSG)                                        \
-    ST_sendMsg(CONTEXT, OBJ, ST_symb(CONTEXT, MSG), 0, NULL)
-
-#define ST_NEW(CONTEXT, CLASSNAME_CSTR)                                        \
-    ST_UNARYSEND(CONTEXT,                                                      \
-                 ST_getGlobal(CONTEXT, ST_symb(CONTEXT, CLASSNAME_CSTR)),      \
-                 "new")
-
-#define ST_SUBCLASS(CONTEXT, BASE_CLASSNAME_STR, DERIVED_CLASSNAME_STR)        \
-    ST_setGlobal(                                                              \
-        CONTEXT, ST_symb(CONTEXT, DERIVED_CLASSNAME_STR),                      \
-        ST_sendMsg(                                                            \
-            CONTEXT,                                                           \
-            ST_getGlobal(context, ST_symb(CONTEXT, BASE_CLASSNAME_STR)),       \
-            ST_symb(CONTEXT, "subclass"), 0, NULL))
-
-#define ST_SETMETHOD(CONTEXT, CNAME, MNAME, C_FUNC, ARGC)                      \
-    ST_setMethod(CONTEXT, ST_getGlobal(CONTEXT, ST_symb(CONTEXT, CNAME)),      \
-                 ST_symb(CONTEXT, MNAME), C_FUNC, ARGC)
 
 #endif /* SMALLTALK_H */
 

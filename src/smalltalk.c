@@ -478,6 +478,7 @@ typedef struct ST_Class {
     ST_MethodMap_Entry *methodTree;
     struct ST_Class *super;
     ST_U16 instanceVariableCount;
+    ST_Object *instanceVariableNames;
     ST_Pool instancePool;
 } ST_Class;
 
@@ -513,6 +514,12 @@ ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
     sub->super = class;
     sub->instanceVariableCount =
         ((ST_Class *)class)->instanceVariableCount + instanceVariableCount;
+    if (instanceVariableCount) {
+        sub->instanceVariableNames = ST_alloc(
+            context, instanceVariableCount * sizeof(ST_Internal_Object *));
+    } else {
+        sub->instanceVariableNames = NULL;
+    }
     sub->methodTree = NULL;
     ST_Pool_init(context, &sub->instancePool,
                  sizeof(ST_Internal_Object) +
@@ -523,32 +530,6 @@ ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
 
 static bool ST_isClass(ST_Internal_Object *object) {
     return (ST_Class *)object == object->class;
-}
-
-static bool ST_Object_hasIVar(ST_Context context, ST_Object object,
-                              ST_U16 position) {
-    if (ST_isClass(object)) {
-        return false;
-    }
-    if (position >= ST_getIVarCount(context, object)) {
-        return false;
-    }
-    return true;
-}
-
-ST_Object ST_getIVar(ST_Context context, ST_Object object, ST_U16 position) {
-    if (!ST_Object_hasIVar(context, object, position))
-        return ST_getNil(context);
-    return ST_Object_getIVars(object)[position];
-}
-
-void ST_setIVar(ST_Context context, ST_Object object, ST_U16 position,
-                ST_Object value) {
-    if (!ST_Object_hasIVar(context, object, position)) {
-        /* FIXME: raise error! */
-        return;
-    }
-    ST_Object_getIVars(object)[position] = value;
 }
 
 static ST_Internal_Method *
@@ -573,11 +554,11 @@ ST_Internal_Object_getMethod(ST_Context context, ST_Internal_Object *obj,
     }
 }
 
-static void ST_failedMethodLookup(ST_Context context, ST_Object receiver,
+static void ST_failedMethodLookup(ST_Context ctx, ST_Object receiver,
                                   ST_Object symbol) {
-    ST_Object err = ST_NEW(context, "MessageNotUnderstood");
-    ST_sendMsg(context, receiver, ST_symb(context, "doesNotUnderstand:"), 1,
-               &err);
+    ST_Object cMNU = ST_getGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"));
+    ST_Object err = ST_sendMsg(ctx, cMNU, ST_symb(ctx, "new"), 0, NULL);
+    ST_sendMsg(ctx, receiver, ST_symb(ctx, "doesNotUnderstand:"), 1, &err);
 }
 
 ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object symbol,
@@ -748,8 +729,8 @@ ST_Object ST_getFalse(ST_Context context) {
     return ((ST_Internal_Context *)context)->falseValue;
 }
 
-ST_Object ST_symb(ST_Context context, const char *symbolName) {
-    ST_Internal_Context *extCtx = context;
+ST_Object ST_symb(ST_Context ctx, const char *symbolName) {
+    ST_Internal_Context *extCtx = ctx;
     ST_BST_Node *found;
     ST_StringMap_Entry searchTmpl;
     ST_StringMap_Entry *newEntry;
@@ -760,17 +741,18 @@ ST_Object ST_symb(ST_Context context, const char *symbolName) {
     if (found) {
         return (ST_Object)((ST_StringMap_Entry *)found)->value;
     }
-    newEntry = ST_Pool_alloc(context, &extCtx->strmapNodePool);
+    newEntry = ST_Pool_alloc(ctx, &extCtx->strmapNodePool);
     ST_BST_Node_init((ST_BST_Node *)newEntry);
-    newEntry->key = ST_strdup(context, symbolName);
-    newSymb = ST_NEW(context, "Symbol");
+    newEntry->key = ST_strdup(ctx, symbolName);
+    newSymb = ST_sendMsg(ctx, ST_getGlobal(ctx, ST_symb(ctx, "Symbol")),
+                         ST_symb(ctx, "new"), 0, NULL);
     ST_Object_setGCMask(newSymb, ST_GC_MASK_PRESERVE);
     newEntry->value = newSymb;
     if (!ST_BST_insert((ST_BST_Node **)&extCtx->symbolRegistry,
                        &newEntry->nodeHeader, ST_StringMap_comparator)) {
-        ST_free(context, newEntry->key);
-        ST_Pool_free(context, &extCtx->strmapNodePool, newEntry);
-        return ST_getNil(context);
+        ST_free(ctx, newEntry->key);
+        ST_Pool_free(ctx, &extCtx->strmapNodePool, newEntry);
+        return ST_getNil(ctx);
     }
     return newEntry->value;
 }
@@ -1079,6 +1061,7 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Class *cInt = ST_Pool_alloc(ctx, &ctx->classPool);
     cInt->instanceVariableCount = 0;
+    cInt->instanceVariableNames = NULL;
     ST_Pool_init(ctx, &cInt->instancePool, sizeof(ST_Integer), 128);
     cInt->methodTree = NULL;
     cInt->super = cObj;
@@ -1175,6 +1158,7 @@ static ST_Object ST_Array_set(ST_Context context, ST_Object self,
 
 static ST_Object ST_Array_len(ST_Context context, ST_Object self,
                               ST_Object argv[]) {
+    /* FIXME: return a clone!!! */
     return ST_Object_getIVars(self)[1];
 }
 
@@ -1182,6 +1166,10 @@ static void ST_initArray(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Class *cArr = ST_Class_subclass(ctx, cObj, 2, 0, 10);
     ST_Class *cNode = ST_Class_subclass(ctx, cObj, 2, 0, 64);
+    cArr->instanceVariableNames[0] = ST_symb(ctx, "data");
+    cArr->instanceVariableNames[1] = ST_symb(ctx, "length");
+    cNode->instanceVariableNames[0] = ST_symb(ctx, "next");
+    cNode->instanceVariableNames[1] = ST_symb(ctx, "element");
     ST_setGlobal(ctx, ST_symb(ctx, "ListNode"), cNode);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "length"), ST_Array_len, 0);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "new:"), ST_Array_new, 1);
@@ -1323,15 +1311,35 @@ static ST_Object ST_subclass(ST_Context context, ST_Object self,
 
 static ST_Object ST_subclassExtended(ST_Context context, ST_Object self,
                                      ST_Object argv[]) {
-    ST_Object rawgetSymb = ST_symb(context, "rawGet");
-    ST_Object lenSymb = ST_symb(context, "length");
-    ST_Object ivarNamesLength = ST_sendMsg(context, argv[1], lenSymb, 0, NULL);
-    ST_Object cvarNamesLength = ST_sendMsg(context, argv[2], lenSymb, 0, NULL);
-    ST_Integer_Rep ivarCount =
-        (intptr_t)ST_sendMsg(context, ivarNamesLength, rawgetSymb, 0, NULL);
-    ST_Integer_Rep cvarCount =
-        (intptr_t)ST_sendMsg(context, cvarNamesLength, rawgetSymb, 0, NULL);
-    return ST_Class_subclass(context, self, ivarCount, cvarCount, 4);
+    ST_Class *subc;
+    ST_GC_pause(context);
+    {
+        ST_Object rawgetSymb = ST_symb(context, "rawGet");
+        ST_Object cInteger = ST_getGlobal(context, ST_symb(context, "Integer"));
+        ST_Object newSymb = ST_symb(context, "new");
+        ST_Object lenSymb = ST_symb(context, "length");
+        ST_Object rawsetSymb = ST_symb(context, "rawSet:");
+        ST_Object atSymb = ST_symb(context, "at:");
+        ST_Object ivarNamesLength =
+            ST_sendMsg(context, argv[1], lenSymb, 0, NULL);
+        ST_Object cvarNamesLength =
+            ST_sendMsg(context, argv[2], lenSymb, 0, NULL);
+        ST_Integer_Rep ivarCount =
+            (intptr_t)ST_sendMsg(context, ivarNamesLength, rawgetSymb, 0, NULL);
+        ST_Integer_Rep cvarCount =
+            (intptr_t)ST_sendMsg(context, cvarNamesLength, rawgetSymb, 0, NULL);
+        ST_Object index = ST_sendMsg(context, cInteger, newSymb, 0, NULL);
+        ST_Integer_Rep i;
+        subc = ST_Class_subclass(context, self, ivarCount, cvarCount, 4);
+        for (i = 0; i < ivarCount; ++i) {
+            ST_Object ivarName;
+            ST_sendMsg(context, index, rawsetSymb, 1, (ST_Object)&i);
+            ivarName = ST_sendMsg(context, argv[1], atSymb, 1, &index);
+            subc->instanceVariableNames[i] = ivarName;
+        }
+    }
+    ST_GC_resume(context);
+    return subc;
 }
 
 static ST_Object ST_class(ST_Context context, ST_Object self,
@@ -1341,15 +1349,9 @@ static ST_Object ST_class(ST_Context context, ST_Object self,
 
 static ST_Object ST_doesNotUnderstand(ST_Context context, ST_Object self,
                                       ST_Object argv[]) {
+    while (1)
+        ;
     return ST_getNil(context);
-}
-
-static void
-ST_Internal_Context_initErrorHandling(ST_Internal_Context *context) {
-    ST_SUBCLASS(context, "Object", "MessageNotUnderstood");
-    ST_SETMETHOD(context, "Object", "doesNotUnderstand:", ST_doesNotUnderstand,
-                 1);
-    ST_SUBCLASS(context, "Object", "Message");
 }
 
 static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
@@ -1367,6 +1369,7 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     cObject->super = NULL;
     cObject->methodTree = NULL;
     cObject->instanceVariableCount = 0;
+    cObject->instanceVariableNames = NULL;
     ST_Pool_init(context, &cObject->instancePool, sizeof(ST_Object), 10);
     cSymbol = ST_Class_subclass(context, cObject, 0, 0, 512);
     symbolSymbol = ST_Class_makeInstance(context, cSymbol);
@@ -1407,24 +1410,33 @@ static ST_Object ST_nopMethod(ST_Context context, ST_Object self,
     return ST_getNil(context);
 }
 
-static void ST_initNil(ST_Internal_Context *context) {
-    ST_SUBCLASS(context, "Object", "UndefinedObject");
-    context->nilValue = ST_NEW(context, "UndefinedObject");
-    ST_Object_setGCMask(context->nilValue, ST_GC_MASK_PRESERVE);
+static void ST_initNil(ST_Internal_Context *ctx) {
+    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
+    ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, 0, 0, 1);
+    ctx->nilValue = ST_sendMsg(ctx, cUndefObj, ST_symb(ctx, "new"), 0, NULL);
+    ST_Object_setGCMask(ctx->nilValue, ST_GC_MASK_PRESERVE);
+    ST_setGlobal(ctx, ST_symb(ctx, "UndefinedObject"), cUndefObj);
 }
 
-static void ST_initBoolean(ST_Internal_Context *context) {
-    ST_SUBCLASS(context, "Object", "Boolean");
-    ST_SUBCLASS(context, "Boolean", "True");
-    ST_SUBCLASS(context, "Boolean", "False");
-    ST_SETMETHOD(context, "True", "ifTrue:", ST_ifTrueImplForTrue, 1);
-    ST_SETMETHOD(context, "True", "ifFalse:", ST_nopMethod, 1);
-    ST_SETMETHOD(context, "False", "ifFalse:", ST_ifFalseImplForFalse, 1);
-    ST_SETMETHOD(context, "False", "ifTrue:", ST_nopMethod, 1);
-    context->trueValue = ST_NEW(context, "True");
-    context->falseValue = ST_NEW(context, "False");
-    ST_Object_setGCMask(context->trueValue, ST_GC_MASK_PRESERVE);
-    ST_Object_setGCMask(context->falseValue, ST_GC_MASK_PRESERVE);
+static void ST_initBoolean(ST_Internal_Context *ctx) {
+    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
+    ST_Object cBoolean = ST_Class_subclass(ctx, cObj, 0, 0, 1);
+    ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, 0, 0, 1);
+    ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, 0, 0, 1);
+    ST_Object ifTrueSymb = ST_symb(ctx, "ifTrue:");
+    ST_Object ifFalseSymb = ST_symb(ctx, "ifFalse:");
+    ST_Object newSymb = ST_symb(ctx, "new");
+    ST_setMethod(ctx, cTrue, ifTrueSymb, ST_ifTrueImplForTrue, 1);
+    ST_setMethod(ctx, cTrue, ifFalseSymb, ST_nopMethod, 1);
+    ST_setMethod(ctx, cFalse, ifTrueSymb, ST_nopMethod, 1);
+    ST_setMethod(ctx, cFalse, ifFalseSymb, ST_ifFalseImplForFalse, 1);
+    ctx->trueValue = ST_sendMsg(ctx, cTrue, newSymb, 0, NULL);
+    ctx->falseValue = ST_sendMsg(ctx, cFalse, newSymb, 0, NULL);
+    ST_Object_setGCMask(ctx->trueValue, ST_GC_MASK_PRESERVE);
+    ST_Object_setGCMask(ctx->falseValue, ST_GC_MASK_PRESERVE);
+    ST_setGlobal(ctx, ST_symb(ctx, "Boolean"), cBoolean);
+    ST_setGlobal(ctx, ST_symb(ctx, "True"), cTrue);
+    ST_setGlobal(ctx, ST_symb(ctx, "False"), cFalse);
 }
 
 static void ST_initObject(ST_Internal_Context *context) {
@@ -1435,6 +1447,14 @@ static void ST_initObject(ST_Internal_Context *context) {
         context, cObj,
         ST_symb(context, "subclass:instanceVariableNames:classVariableNames:"),
         ST_subclassExtended, 3);
+}
+
+static void ST_initErrorHandling(ST_Internal_Context *ctx) {
+    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
+    ST_Object cMNU = ST_Class_subclass(ctx, cObj, 0, 0, 1);
+    ST_setGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"), cMNU);
+    ST_setMethod(ctx, cObj, ST_symb(ctx, "doesNotUnderstand:"),
+                 ST_doesNotUnderstand, 1);
 }
 
 ST_Context ST_createContext(const ST_Context_Configuration *config) {
@@ -1457,7 +1477,7 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     ST_initObject(ctx);
     ST_initNil(ctx);
     ST_initBoolean(ctx);
-    ST_Internal_Context_initErrorHandling(ctx);
+    ST_initErrorHandling(ctx);
     ST_initInteger(ctx);
     ST_initArray(ctx);
     ST_GC_resume(ctx);
