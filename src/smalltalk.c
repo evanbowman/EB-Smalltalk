@@ -146,7 +146,7 @@ static void *ST_Pool_alloc(ST_Context context, ST_Pool *pool) {
 }
 
 /* Note: only meant for use by the garbage collector */
-void ST_Pool_scan(ST_Pool *pool, ST_Visitor *visitor) {
+static void ST_Pool_scan(ST_Pool *pool, ST_Visitor *visitor) {
     ST_Pool_Slab *slab = pool->slabs;
     ST_Size slabElemCount = pool->lastAllocCount;
     while (slab) {
@@ -181,6 +181,11 @@ static void ST_Pool_release(ST_Context context, ST_Pool *pool) {
 // Context struct
 /////////////////////////////////////////////////////////////////////////////*/
 
+typedef struct ST_SharedInstancePool {
+    ST_Pool pool;
+    struct ST_SharedInstancePool *next;
+} ST_SharedInstancePool;
+
 typedef struct ST_Internal_Context {
     ST_Context_Configuration config;
     struct ST_StringMap_Entry *symbolRegistry;
@@ -197,6 +202,8 @@ typedef struct ST_Internal_Context {
     ST_Pool methodNodePool;
     ST_Pool strmapNodePool;
     ST_Pool classPool;
+    ST_Pool integerPool;
+    ST_SharedInstancePool *sharedPools;
     bool gcPaused;
 } ST_Internal_Context;
 
@@ -363,7 +370,7 @@ static ST_BST_Node *ST_BST_find(ST_BST_Node **root, void *key,
     }
 }
 
-void ST_BST_traverse(ST_BST_Node *root, ST_Visitor *visitor) {
+static void ST_BST_traverse(ST_BST_Node *root, ST_Visitor *visitor) {
     ST_BST_Node *current, *parent;
     if (root == NULL)
         return;
@@ -453,15 +460,39 @@ typedef struct ST_Internal_Object {
    struct ST_Internal_Object *InstanceVariables[] */
 } ST_Internal_Object;
 
-void ST_Object_setGCMask(ST_Object obj, enum ST_GC_Mask mask) {
+static ST_Size ST_getObjectFootprint(ST_Size ivarCount) {
+    return ivarCount * sizeof(ST_Object) + sizeof(ST_Internal_Object);
+}
+
+static ST_Pool *ST_getSharedInstancePool(ST_Internal_Context *context,
+                                         ST_Size ivarCount) {
+    ST_SharedInstancePool *current = context->sharedPools;
+    ST_Size targetSize = ST_getObjectFootprint(ivarCount);
+    while (current) {
+        if (current->pool.elemSize == targetSize) {
+            return (ST_Pool *)current;
+        }
+        current = current->next;
+    }
+    {
+        ST_SharedInstancePool *new =
+            ST_alloc(context, sizeof(ST_SharedInstancePool));
+        ST_Pool_init(context, (ST_Pool *)new, targetSize, 4);
+        new->next = context->sharedPools;
+        context->sharedPools = new;
+        return (ST_Pool *)new;
+    }
+}
+
+static void ST_Object_setGCMask(ST_Object obj, enum ST_GC_Mask mask) {
     ((ST_Internal_Object *)obj)->gcMask |= mask;
 }
 
-void ST_Object_unsetGCMask(ST_Object obj, enum ST_GC_Mask mask) {
+static void ST_Object_unsetGCMask(ST_Object obj, enum ST_GC_Mask mask) {
     ((ST_Internal_Object *)obj)->gcMask &= ~mask;
 }
 
-bool ST_Object_matchGCMask(ST_Object obj, enum ST_GC_Mask mask) {
+static bool ST_Object_matchGCMask(ST_Object obj, enum ST_GC_Mask mask) {
     return ((ST_Internal_Object *)obj)->gcMask & mask;
 }
 
@@ -479,7 +510,7 @@ typedef struct ST_Class {
     struct ST_Class *super;
     ST_U16 instanceVariableCount;
     ST_Object *instanceVariableNames;
-    ST_Pool instancePool;
+    ST_Pool *instancePool;
 } ST_Class;
 
 ST_U16 ST_getIVarCount(ST_Context context, ST_Object object) {
@@ -492,7 +523,7 @@ ST_Object ST_getSuper(ST_Context context, ST_Object object) {
 
 ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
                                           ST_Class *class) {
-    ST_Internal_Object *instance = ST_Pool_alloc(context, &class->instancePool);
+    ST_Internal_Object *instance = ST_Pool_alloc(context, class->instancePool);
     ST_Internal_Object **ivars = ST_Object_getIVars(instance);
     ST_Size i;
     for (i = 0; i < class->instanceVariableCount; ++i) {
@@ -503,10 +534,10 @@ ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *context,
     return instance;
 }
 
-ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
-                            ST_Size instanceVariableCount,
-                            ST_Size classVariableCount,
-                            ST_Size instancePoolHint) {
+static ST_Class *ST_Class_subclass(ST_Internal_Context *context,
+                                   ST_Class *class,
+                                   ST_Size instanceVariableCount,
+                                   ST_Size classVariableCount) {
     ST_Class *sub =
         ST_Pool_alloc(context, &((ST_Internal_Context *)context)->classPool);
     sub->object.class = sub;
@@ -521,10 +552,8 @@ ST_Class *ST_Class_subclass(ST_Internal_Context *context, ST_Class *class,
         sub->instanceVariableNames = NULL;
     }
     sub->methodTree = NULL;
-    ST_Pool_init(context, &sub->instancePool,
-                 sizeof(ST_Internal_Object) +
-                     sizeof(ST_Internal_Object *) * sub->instanceVariableCount,
-                 instancePoolHint);
+    sub->instancePool =
+        ST_getSharedInstancePool(context, sub->instanceVariableCount);
     return sub;
 }
 
@@ -1062,7 +1091,7 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     ST_Class *cInt = ST_Pool_alloc(ctx, &ctx->classPool);
     cInt->instanceVariableCount = 0;
     cInt->instanceVariableNames = NULL;
-    ST_Pool_init(ctx, &cInt->instancePool, sizeof(ST_Integer), 128);
+    cInt->instancePool = &ctx->integerPool;
     cInt->methodTree = NULL;
     cInt->super = cObj;
     cInt->object.class = cInt;
@@ -1164,8 +1193,8 @@ static ST_Object ST_Array_len(ST_Context context, ST_Object self,
 
 static void ST_initArray(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Class *cArr = ST_Class_subclass(ctx, cObj, 2, 0, 10);
-    ST_Class *cNode = ST_Class_subclass(ctx, cObj, 2, 0, 64);
+    ST_Class *cArr = ST_Class_subclass(ctx, cObj, 2, 0);
+    ST_Class *cNode = ST_Class_subclass(ctx, cObj, 2, 0);
     cArr->instanceVariableNames[0] = ST_symb(ctx, "data");
     cArr->instanceVariableNames[1] = ST_symb(ctx, "length");
     cNode->instanceVariableNames[0] = ST_symb(ctx, "next");
@@ -1234,7 +1263,7 @@ static void ST_GC_sweepVisitInstance(ST_Visitor *visitor, void *instanceMem) {
             ST_Object_unsetGCMask(obj, ST_GC_MASK_MARKED);
         } else {
             obj->gcMask = 0;
-            ST_Pool_free(context, &obj->class->instancePool, obj);
+            ST_Pool_free(context, obj->class->instancePool, obj);
         }
     }
 }
@@ -1243,10 +1272,6 @@ static void ST_GC_sweepVisitClass(ST_Visitor *visitor, void *classMem) {
     ST_Class *class = classMem;
     ST_Internal_Context *context = ((ST_GC_Visitor *)visitor)->context;
     if (ST_Object_matchGCMask(class, ST_GC_MASK_ALIVE)) {
-        ST_GC_Visitor ivarVisitor;
-        ivarVisitor.visitor.visit = ST_GC_sweepVisitInstance;
-        ivarVisitor.context = context;
-        ST_Pool_scan(&class->instancePool, (ST_Visitor *)&ivarVisitor);
         if (ST_Object_matchGCMask(class,
                                   ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE)) {
             ST_Object_unsetGCMask(class, ST_GC_MASK_MARKED);
@@ -1258,7 +1283,6 @@ static void ST_GC_sweepVisitClass(ST_Visitor *visitor, void *classMem) {
                 ST_Pool_free(context, &context->methodNodePool, removed);
             }
             class->object.gcMask = 0;
-            ST_Pool_release(context, &class->instancePool);
             /* FIXME: free class methods! */
             ST_Pool_free(context, &context->classPool, class);
         }
@@ -1266,10 +1290,19 @@ static void ST_GC_sweepVisitClass(ST_Visitor *visitor, void *classMem) {
 }
 
 static void ST_GC_sweep(ST_Internal_Context *context) {
-    ST_GC_Visitor classVisitor;
-    classVisitor.visitor.visit = ST_GC_sweepVisitClass;
-    classVisitor.context = context;
-    ST_Pool_scan(&context->classPool, (ST_Visitor *)&classVisitor);
+    ST_GC_Visitor visitor;
+    visitor.visitor.visit = ST_GC_sweepVisitClass;
+    visitor.context = context;
+    ST_Pool_scan(&context->classPool, (ST_Visitor *)&visitor);
+    visitor.visitor.visit = ST_GC_sweepVisitInstance;
+    ST_Pool_scan(&context->integerPool, (ST_Visitor *)&visitor);
+    {
+        ST_SharedInstancePool *sharedPool = context->sharedPools;
+        while (sharedPool) {
+            ST_Pool_scan(&sharedPool->pool, (ST_Visitor *)&visitor);
+            sharedPool = sharedPool->next;
+        }
+    }
 }
 
 void ST_GC_run(ST_Context context) {
@@ -1306,7 +1339,7 @@ static ST_Object ST_new(ST_Context context, ST_Object self, ST_Object argv[]) {
 
 static ST_Object ST_subclass(ST_Context context, ST_Object self,
                              ST_Object argv[]) {
-    return ST_Class_subclass(context, self, 0, 0, 4);
+    return ST_Class_subclass(context, self, 0, 0);
 }
 
 static ST_Object ST_subclassExtended(ST_Context context, ST_Object self,
@@ -1330,7 +1363,7 @@ static ST_Object ST_subclassExtended(ST_Context context, ST_Object self,
             (intptr_t)ST_sendMsg(context, cvarNamesLength, rawgetSymb, 0, NULL);
         ST_Object index = ST_sendMsg(context, cInteger, newSymb, 0, NULL);
         ST_Integer_Rep i;
-        subc = ST_Class_subclass(context, self, ivarCount, cvarCount, 4);
+        subc = ST_Class_subclass(context, self, ivarCount, cvarCount);
         for (i = 0; i < ivarCount; ++i) {
             ST_Object ivarName;
             ST_sendMsg(context, index, rawsetSymb, 1, (ST_Object)&i);
@@ -1370,8 +1403,8 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *context) {
     cObject->methodTree = NULL;
     cObject->instanceVariableCount = 0;
     cObject->instanceVariableNames = NULL;
-    ST_Pool_init(context, &cObject->instancePool, sizeof(ST_Object), 10);
-    cSymbol = ST_Class_subclass(context, cObject, 0, 0, 512);
+    cObject->instancePool = ST_getSharedInstancePool(context, 0);
+    cSymbol = ST_Class_subclass(context, cObject, 0, 0);
     symbolSymbol = ST_Class_makeInstance(context, cSymbol);
     newSymbol = ST_Class_makeInstance(context, cSymbol);
     ST_Object_setGCMask(symbolSymbol, ST_GC_MASK_PRESERVE);
@@ -1412,7 +1445,7 @@ static ST_Object ST_nopMethod(ST_Context context, ST_Object self,
 
 static void ST_initNil(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, 0, 0, 1);
+    ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, 0, 0);
     ctx->nilValue = ST_sendMsg(ctx, cUndefObj, ST_symb(ctx, "new"), 0, NULL);
     ST_Object_setGCMask(ctx->nilValue, ST_GC_MASK_PRESERVE);
     ST_setGlobal(ctx, ST_symb(ctx, "UndefinedObject"), cUndefObj);
@@ -1420,9 +1453,9 @@ static void ST_initNil(ST_Internal_Context *ctx) {
 
 static void ST_initBoolean(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cBoolean = ST_Class_subclass(ctx, cObj, 0, 0, 1);
-    ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, 0, 0, 1);
-    ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, 0, 0, 1);
+    ST_Object cBoolean = ST_Class_subclass(ctx, cObj, 0, 0);
+    ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, 0, 0);
+    ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, 0, 0);
     ST_Object ifTrueSymb = ST_symb(ctx, "ifTrue:");
     ST_Object ifFalseSymb = ST_symb(ctx, "ifFalse:");
     ST_Object newSymb = ST_symb(ctx, "new");
@@ -1451,7 +1484,7 @@ static void ST_initObject(ST_Internal_Context *context) {
 
 static void ST_initErrorHandling(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cMNU = ST_Class_subclass(ctx, cObj, 0, 0, 1);
+    ST_Object cMNU = ST_Class_subclass(ctx, cObj, 0, 0);
     ST_setGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"), cMNU);
     ST_setMethod(ctx, cObj, ST_symb(ctx, "doesNotUnderstand:"),
                  ST_doesNotUnderstand, 1);
@@ -1463,12 +1496,14 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
     if (!ctx)
         return NULL;
     ctx->config = *config;
+    ctx->sharedPools = NULL;
     ST_GC_pause(ctx);
     ST_Pool_init(ctx, &ctx->gvarNodePool, sizeof(ST_GlobalVarMap_Entry), 100);
     ST_Pool_init(ctx, &ctx->vmFramePool, sizeof(ST_VM_Frame), 50);
     ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 512);
     ST_Pool_init(ctx, &ctx->strmapNodePool, sizeof(ST_StringMap_Entry), 512);
     ST_Pool_init(ctx, &ctx->classPool, sizeof(ST_Class), 100);
+    ST_Pool_init(ctx, &ctx->integerPool, sizeof(ST_Integer), 128);
     ctx->operandStack.base = ST_alloc(ctx, sizeof(ST_Internal_Object *) *
                                                config->memory.stackCapacity);
     ctx->operandStack.top =
@@ -1512,5 +1547,10 @@ void ST_destroyContext(ST_Context context) {
     ST_Pool_release(context, &ctxImpl->methodNodePool);
     ST_Pool_release(context, &ctxImpl->strmapNodePool);
     ST_Pool_release(context, &ctxImpl->classPool);
+    ST_Pool_release(context, &ctxImpl->integerPool);
+    while (ctxImpl->sharedPools) {
+        ST_Pool_release(context, &ctxImpl->sharedPools->pool);
+        ctxImpl->sharedPools = ctxImpl->sharedPools->next;
+    }
     ST_free(context, context);
 }

@@ -1,2 +1,2 @@
 language: c
-script: cd build && cmake . && make
+script: cd build && cmake -DUNIT=true . && make
