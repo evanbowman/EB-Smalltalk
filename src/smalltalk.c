@@ -803,6 +803,7 @@ typedef enum ST_VM_Opcode {
     ST_VM_OP_PUSHNIL,
     ST_VM_OP_PUSHTRUE,
     ST_VM_OP_PUSHFALSE,
+    ST_VM_OP_PUSHSUPER,
     ST_VM_OP_PUSHSYMBOL,
     ST_VM_OP_SENDMSG,
     ST_VM_OP_SETMETHOD,
@@ -897,6 +898,14 @@ static void ST_Internal_VM_execute(ST_Internal_Context *ctx,
             ST_pushStack(ctx, ST_getFalse(ctx));
             frame->ip += ST_OPCODE_SIZE;
             break;
+
+        case ST_VM_OP_PUSHSUPER: {
+            ST_Internal_Object *obj = ST_refStack(ctx, 0);
+            ST_popStack(ctx);
+            ST_pushStack(ctx, obj->class->super);
+            frame->ip += ST_OPCODE_SIZE;
+        } break;
+
 
         case ST_VM_OP_PUSHSYMBOL:
             ST_pushStack(ctx, frame->code->symbTab[ST_readLE16(frame, 1)]);
@@ -1253,11 +1262,6 @@ static ST_Object ST_class(ST_Context ctx, ST_Object self, ST_Object argv[]) {
     return ((ST_Internal_Object *)self)->class;
 }
 
-static ST_Object ST_superclass(ST_Context ctx, ST_Object self,
-                               ST_Object argv[]) {
-    return ((ST_Internal_Object *)self)->class->super;
-}
-
 static ST_Object ST_doesNotUnderstand(ST_Context ctx, ST_Object self,
                                       ST_Object argv[]) {
     while (1)
@@ -1330,7 +1334,6 @@ static void ST_initObject(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcMethodName), ST_subclass, 0);
     ST_setMethod(ctx, cObj, ST_symb(ctx, "class"), ST_class, 0);
-    ST_setMethod(ctx, cObj, ST_symb(ctx, "superclass"), ST_superclass, 0);
     ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcExtMethodName),
                  ST_subclassExtended, 3);
 }
