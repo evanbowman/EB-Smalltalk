@@ -1206,6 +1206,210 @@ static void ST_initArray(ST_Internal_Context *ctx) {
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
+// Language types and methods
+/////////////////////////////////////////////////////////////////////////////*/
+
+static ST_Object ST_new(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+    ST_Class *class = self;
+    return ST_Class_makeInstance(ctx, class);
+}
+
+static ST_Object ST_subclass(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+    return ST_Class_subclass(ctx, self, 0, 0);
+}
+
+static ST_Object ST_subclassExtended(ST_Context ctx, ST_Object self,
+                                     ST_Object argv[]) {
+    ST_Class *subc;
+    ST_GC_pause(ctx);
+    {
+        ST_Object rawgetSymb = ST_symb(ctx, "rawGet");
+        ST_Object cInteger = ST_getGlobal(ctx, ST_symb(ctx, "Integer"));
+        ST_Object newSymb = ST_symb(ctx, "new");
+        ST_Object lenSymb = ST_symb(ctx, "length");
+        ST_Object rawsetSymb = ST_symb(ctx, "rawSet:");
+        ST_Object atSymb = ST_symb(ctx, "at:");
+        ST_Object ivarNamesLength = ST_sendMsg(ctx, argv[1], lenSymb, 0, NULL);
+        ST_Object cvarNamesLength = ST_sendMsg(ctx, argv[2], lenSymb, 0, NULL);
+        ST_Integer_Rep ivarCount =
+            (intptr_t)ST_sendMsg(ctx, ivarNamesLength, rawgetSymb, 0, NULL);
+        ST_Integer_Rep cvarCount =
+            (intptr_t)ST_sendMsg(ctx, cvarNamesLength, rawgetSymb, 0, NULL);
+        ST_Object index = ST_sendMsg(ctx, cInteger, newSymb, 0, NULL);
+        ST_Integer_Rep i;
+        subc = ST_Class_subclass(ctx, self, ivarCount, cvarCount);
+        for (i = 0; i < ivarCount; ++i) {
+            ST_Object ivarName;
+            ST_sendMsg(ctx, index, rawsetSymb, 1, (ST_Object)&i);
+            ivarName = ST_sendMsg(ctx, argv[1], atSymb, 1, &index);
+            subc->instanceVariableNames[i] = ivarName;
+        }
+    }
+    ST_GC_resume(ctx);
+    return subc;
+}
+
+static ST_Object ST_class(ST_Context ctx, ST_Object self, ST_Object argv[]) {
+    return ((ST_Internal_Object *)self)->class;
+}
+
+static ST_Object ST_superclass(ST_Context ctx, ST_Object self,
+                               ST_Object argv[]) {
+    return ((ST_Internal_Object *)self)->class->super;
+}
+
+static ST_Object ST_doesNotUnderstand(ST_Context ctx, ST_Object self,
+                                      ST_Object argv[]) {
+    while (1)
+        ;
+    return ST_getNil(ctx);
+}
+
+static bool ST_Internal_Context_bootstrap(ST_Internal_Context *ctx) {
+    /* We need to do things manually for a bit, until we've defined the
+ symbol class and the new method, because most of the functions in
+ the runtime depend on Symbol. */
+    ST_Class *cObject = ST_Pool_alloc(ctx, &ctx->classPool);
+    ST_Class *cSymbol;
+    ST_Internal_Object *symbolSymbol;
+    ST_Internal_Object *newSymbol;
+    ST_StringMap_Entry *newEntry = ST_Pool_alloc(ctx, &ctx->strmapNodePool);
+    ST_BST_Node_init((ST_BST_Node *)newEntry);
+    cObject->object.class = cObject;
+    cObject->super = NULL;
+    cObject->methodTree = NULL;
+    cObject->instanceVariableCount = 0;
+    cObject->instanceVariableNames = NULL;
+    cObject->instancePool = ST_getSharedInstancePool(ctx, 0);
+    cSymbol = ST_Class_subclass(ctx, cObject, 0, 0);
+    symbolSymbol = ST_Class_makeInstance(ctx, cSymbol);
+    newSymbol = ST_Class_makeInstance(ctx, cSymbol);
+    ST_Object_setGCMask(symbolSymbol, ST_GC_MASK_PRESERVE);
+    ST_Object_setGCMask(newSymbol, ST_GC_MASK_PRESERVE);
+    ctx->symbolRegistry = ST_Pool_alloc(ctx, &ctx->strmapNodePool);
+    ST_BST_Node_init((ST_BST_Node *)ctx->symbolRegistry);
+    ctx->symbolRegistry->key = ST_strdup(ctx, "Symbol");
+    ctx->symbolRegistry->value = symbolSymbol;
+    ctx->globalScope = ST_Pool_alloc(ctx, &ctx->gvarNodePool);
+    ST_BST_Node_init((ST_BST_Node *)ctx->globalScope);
+    ctx->globalScope->header.symbol = symbolSymbol;
+    ctx->globalScope->value = (ST_Object)cSymbol;
+    newEntry->key = ST_strdup(ctx, "new");
+    newEntry->value = newSymbol;
+    ST_BST_insert((ST_BST_Node **)&ctx->symbolRegistry, &newEntry->nodeHeader,
+                  ST_StringMap_comparator);
+    ST_setMethod(ctx, cObject, newSymbol, ST_new, 0);
+    ST_setGlobal(ctx, ST_symb(ctx, "Object"), cObject);
+    return true;
+}
+
+static void ST_initNil(ST_Internal_Context *ctx) {
+    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
+    ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, 0, 0);
+    ctx->nilValue = ST_sendMsg(ctx, cUndefObj, ST_symb(ctx, "new"), 0, NULL);
+    ST_Object_setGCMask(ctx->nilValue, ST_GC_MASK_PRESERVE);
+    ST_setGlobal(ctx, ST_symb(ctx, "UndefinedObject"), cUndefObj);
+}
+
+static void ST_initBoolean(ST_Internal_Context *ctx) {
+    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
+    ST_Object cBoolean = ST_Class_subclass(ctx, cObj, 0, 0);
+    ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, 0, 0);
+    ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, 0, 0);
+    ST_Object newSymb = ST_symb(ctx, "new");
+    ctx->trueValue = ST_sendMsg(ctx, cTrue, newSymb, 0, NULL);
+    ctx->falseValue = ST_sendMsg(ctx, cFalse, newSymb, 0, NULL);
+    ST_Object_setGCMask(ctx->trueValue, ST_GC_MASK_PRESERVE);
+    ST_Object_setGCMask(ctx->falseValue, ST_GC_MASK_PRESERVE);
+    ST_setGlobal(ctx, ST_symb(ctx, "Boolean"), cBoolean);
+    ST_setGlobal(ctx, ST_symb(ctx, "True"), cTrue);
+    ST_setGlobal(ctx, ST_symb(ctx, "False"), cFalse);
+}
+
+static void ST_initObject(ST_Internal_Context *ctx) {
+    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
+    ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcMethodName), ST_subclass, 0);
+    ST_setMethod(ctx, cObj, ST_symb(ctx, "class"), ST_class, 0);
+    ST_setMethod(ctx, cObj, ST_symb(ctx, "superclass"), ST_superclass, 0);
+    ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcExtMethodName),
+                 ST_subclassExtended, 3);
+}
+
+static void ST_initErrorHandling(ST_Internal_Context *ctx) {
+    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
+    ST_Object cMNU = ST_Class_subclass(ctx, cObj, 0, 0);
+    ST_setGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"), cMNU);
+    ST_setMethod(ctx, cObj, ST_symb(ctx, "doesNotUnderstand:"),
+                 ST_doesNotUnderstand, 1);
+}
+
+ST_Context ST_createContext(const ST_Context_Configuration *config) {
+    ST_Internal_Context *ctx =
+        config->memory.allocFn(sizeof(ST_Internal_Context));
+    if (!ctx)
+        return NULL;
+    ctx->config = *config;
+    ctx->sharedPools = NULL;
+    ST_GC_pause(ctx);
+    ST_Pool_init(ctx, &ctx->gvarNodePool, sizeof(ST_GlobalVarMap_Entry), 100);
+    ST_Pool_init(ctx, &ctx->vmFramePool, sizeof(ST_VM_Frame), 50);
+    ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 512);
+    ST_Pool_init(ctx, &ctx->strmapNodePool, sizeof(ST_StringMap_Entry), 512);
+    ST_Pool_init(ctx, &ctx->classPool, sizeof(ST_Class), 100);
+    ST_Pool_init(ctx, &ctx->integerPool, sizeof(ST_Integer), 128);
+    ctx->operandStack.base = ST_alloc(ctx, sizeof(ST_Internal_Object *) *
+                                               config->memory.stackCapacity);
+    ctx->operandStack.top =
+        (struct ST_Internal_Object **)ctx->operandStack.base;
+    ST_Internal_Context_bootstrap(ctx);
+    ST_initObject(ctx);
+    ST_initNil(ctx);
+    ST_initBoolean(ctx);
+    ST_initErrorHandling(ctx);
+    ST_initInteger(ctx);
+    ST_initArray(ctx);
+    ST_GC_resume(ctx);
+    return ctx;
+}
+
+void ST_destroyContext(ST_Context ctx) {
+    ST_Internal_Context *ctxImpl = ctx;
+    while (ctxImpl->globalScope) {
+        ST_BST_Node *removedGVar =
+            ST_BST_remove((ST_BST_Node **)&ctxImpl->globalScope,
+                          ctxImpl->globalScope, ST_SymbolMap_comparator);
+        ST_Pool_free(ctx, &ctxImpl->gvarNodePool, removedGVar);
+    }
+    while (ctxImpl->symbolRegistry) {
+        ST_StringMap_Entry *removedSymb = (ST_StringMap_Entry *)ST_BST_remove(
+            (ST_BST_Node **)&ctxImpl->symbolRegistry, ctxImpl->symbolRegistry,
+            ST_StringMap_comparator);
+        ST_Object_unsetGCMask(removedSymb->value, ST_GC_MASK_PRESERVE);
+        ST_free(ctx, removedSymb->key);
+        ST_Pool_free(ctx, &ctxImpl->strmapNodePool, removedSymb);
+    }
+    ST_Object_unsetGCMask(ctxImpl->nilValue, ST_GC_MASK_PRESERVE);
+    ST_Object_unsetGCMask(ctxImpl->trueValue, ST_GC_MASK_PRESERVE);
+    ST_Object_unsetGCMask(ctxImpl->falseValue, ST_GC_MASK_PRESERVE);
+    ctxImpl->operandStack.top =
+        (struct ST_Internal_Object **)ctxImpl->operandStack.base;
+    ST_GC_run(ctx);
+    ST_free(ctx, ctxImpl->operandStack.base);
+    ST_Pool_release(ctx, &ctxImpl->gvarNodePool);
+    ST_Pool_release(ctx, &ctxImpl->vmFramePool);
+    ST_Pool_release(ctx, &ctxImpl->methodNodePool);
+    ST_Pool_release(ctx, &ctxImpl->strmapNodePool);
+    ST_Pool_release(ctx, &ctxImpl->classPool);
+    ST_Pool_release(ctx, &ctxImpl->integerPool);
+    while (ctxImpl->sharedPools) {
+        ST_Pool_release(ctx, &ctxImpl->sharedPools->pool);
+        ST_free(ctx, ctxImpl->sharedPools);
+        ctxImpl->sharedPools = ctxImpl->sharedPools->next;
+    }
+    ST_free(ctx, ctx);
+}
+
+/*//////////////////////////////////////////////////////////////////////////////
 // GC
 /////////////////////////////////////////////////////////////////////////////*/
 
@@ -1322,202 +1526,4 @@ void ST_GC_pause(ST_Context ctx) {
 
 void ST_GC_resume(ST_Context ctx) {
     ((ST_Internal_Context *)ctx)->gcPaused = false;
-}
-
-/*//////////////////////////////////////////////////////////////////////////////
-// Language types and methods
-/////////////////////////////////////////////////////////////////////////////*/
-
-static ST_Object ST_new(ST_Context ctx, ST_Object self, ST_Object argv[]) {
-    ST_Class *class = self;
-    return ST_Class_makeInstance(ctx, class);
-}
-
-static ST_Object ST_subclass(ST_Context ctx, ST_Object self, ST_Object argv[]) {
-    return ST_Class_subclass(ctx, self, 0, 0);
-}
-
-static ST_Object ST_subclassExtended(ST_Context ctx, ST_Object self,
-                                     ST_Object argv[]) {
-    ST_Class *subc;
-    ST_GC_pause(ctx);
-    {
-        ST_Object rawgetSymb = ST_symb(ctx, "rawGet");
-        ST_Object cInteger = ST_getGlobal(ctx, ST_symb(ctx, "Integer"));
-        ST_Object newSymb = ST_symb(ctx, "new");
-        ST_Object lenSymb = ST_symb(ctx, "length");
-        ST_Object rawsetSymb = ST_symb(ctx, "rawSet:");
-        ST_Object atSymb = ST_symb(ctx, "at:");
-        ST_Object ivarNamesLength = ST_sendMsg(ctx, argv[1], lenSymb, 0, NULL);
-        ST_Object cvarNamesLength = ST_sendMsg(ctx, argv[2], lenSymb, 0, NULL);
-        ST_Integer_Rep ivarCount =
-            (intptr_t)ST_sendMsg(ctx, ivarNamesLength, rawgetSymb, 0, NULL);
-        ST_Integer_Rep cvarCount =
-            (intptr_t)ST_sendMsg(ctx, cvarNamesLength, rawgetSymb, 0, NULL);
-        ST_Object index = ST_sendMsg(ctx, cInteger, newSymb, 0, NULL);
-        ST_Integer_Rep i;
-        subc = ST_Class_subclass(ctx, self, ivarCount, cvarCount);
-        for (i = 0; i < ivarCount; ++i) {
-            ST_Object ivarName;
-            ST_sendMsg(ctx, index, rawsetSymb, 1, (ST_Object)&i);
-            ivarName = ST_sendMsg(ctx, argv[1], atSymb, 1, &index);
-            subc->instanceVariableNames[i] = ivarName;
-        }
-    }
-    ST_GC_resume(ctx);
-    return subc;
-}
-
-static ST_Object ST_class(ST_Context ctx, ST_Object self, ST_Object argv[]) {
-    return ((ST_Internal_Object *)self)->class;
-}
-
-static ST_Object ST_doesNotUnderstand(ST_Context ctx, ST_Object self,
-                                      ST_Object argv[]) {
-    while (1)
-        ;
-    return ST_getNil(ctx);
-}
-
-static bool ST_Internal_Context_bootstrap(ST_Internal_Context *ctx) {
-    /* We need to do things manually for a bit, until we've defined the
- symbol class and the new method, because most of the functions in
- the runtime depend on Symbol. */
-    ST_Class *cObject = ST_Pool_alloc(ctx, &ctx->classPool);
-    ST_Class *cSymbol;
-    ST_Internal_Object *symbolSymbol;
-    ST_Internal_Object *newSymbol;
-    ST_StringMap_Entry *newEntry = ST_Pool_alloc(ctx, &ctx->strmapNodePool);
-    ST_BST_Node_init((ST_BST_Node *)newEntry);
-    cObject->object.class = cObject;
-    cObject->super = NULL;
-    cObject->methodTree = NULL;
-    cObject->instanceVariableCount = 0;
-    cObject->instanceVariableNames = NULL;
-    cObject->instancePool = ST_getSharedInstancePool(ctx, 0);
-    cSymbol = ST_Class_subclass(ctx, cObject, 0, 0);
-    symbolSymbol = ST_Class_makeInstance(ctx, cSymbol);
-    newSymbol = ST_Class_makeInstance(ctx, cSymbol);
-    ST_Object_setGCMask(symbolSymbol, ST_GC_MASK_PRESERVE);
-    ST_Object_setGCMask(newSymbol, ST_GC_MASK_PRESERVE);
-    ctx->symbolRegistry = ST_Pool_alloc(ctx, &ctx->strmapNodePool);
-    ST_BST_Node_init((ST_BST_Node *)ctx->symbolRegistry);
-    ctx->symbolRegistry->key = ST_strdup(ctx, "Symbol");
-    ctx->symbolRegistry->value = symbolSymbol;
-    ctx->globalScope = ST_Pool_alloc(ctx, &ctx->gvarNodePool);
-    ST_BST_Node_init((ST_BST_Node *)ctx->globalScope);
-    ctx->globalScope->header.symbol = symbolSymbol;
-    ctx->globalScope->value = (ST_Object)cSymbol;
-    newEntry->key = ST_strdup(ctx, "new");
-    newEntry->value = newSymbol;
-    ST_BST_insert((ST_BST_Node **)&ctx->symbolRegistry, &newEntry->nodeHeader,
-                  ST_StringMap_comparator);
-    ST_setMethod(ctx, cObject, newSymbol, ST_new, 0);
-    ST_setGlobal(ctx, ST_symb(ctx, "Object"), cObject);
-    return true;
-}
-
-static void ST_initNil(ST_Internal_Context *ctx) {
-    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, 0, 0);
-    ctx->nilValue = ST_sendMsg(ctx, cUndefObj, ST_symb(ctx, "new"), 0, NULL);
-    ST_Object_setGCMask(ctx->nilValue, ST_GC_MASK_PRESERVE);
-    ST_setGlobal(ctx, ST_symb(ctx, "UndefinedObject"), cUndefObj);
-}
-
-static void ST_initBoolean(ST_Internal_Context *ctx) {
-    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cBoolean = ST_Class_subclass(ctx, cObj, 0, 0);
-    ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, 0, 0);
-    ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, 0, 0);
-    ST_Object newSymb = ST_symb(ctx, "new");
-    ctx->trueValue = ST_sendMsg(ctx, cTrue, newSymb, 0, NULL);
-    ctx->falseValue = ST_sendMsg(ctx, cFalse, newSymb, 0, NULL);
-    ST_Object_setGCMask(ctx->trueValue, ST_GC_MASK_PRESERVE);
-    ST_Object_setGCMask(ctx->falseValue, ST_GC_MASK_PRESERVE);
-    ST_setGlobal(ctx, ST_symb(ctx, "Boolean"), cBoolean);
-    ST_setGlobal(ctx, ST_symb(ctx, "True"), cTrue);
-    ST_setGlobal(ctx, ST_symb(ctx, "False"), cFalse);
-}
-
-static void ST_initObject(ST_Internal_Context *ctx) {
-    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcMethodName), ST_subclass, 0);
-    ST_setMethod(ctx, cObj, ST_symb(ctx, "class"), ST_class, 0);
-    ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcExtMethodName),
-                 ST_subclassExtended, 3);
-}
-
-static void ST_initErrorHandling(ST_Internal_Context *ctx) {
-    ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cMNU = ST_Class_subclass(ctx, cObj, 0, 0);
-    ST_setGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"), cMNU);
-    ST_setMethod(ctx, cObj, ST_symb(ctx, "doesNotUnderstand:"),
-                 ST_doesNotUnderstand, 1);
-}
-
-ST_Context ST_createContext(const ST_Context_Configuration *config) {
-    ST_Internal_Context *ctx =
-        config->memory.allocFn(sizeof(ST_Internal_Context));
-    if (!ctx)
-        return NULL;
-    ctx->config = *config;
-    ctx->sharedPools = NULL;
-    ST_GC_pause(ctx);
-    ST_Pool_init(ctx, &ctx->gvarNodePool, sizeof(ST_GlobalVarMap_Entry), 100);
-    ST_Pool_init(ctx, &ctx->vmFramePool, sizeof(ST_VM_Frame), 50);
-    ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 512);
-    ST_Pool_init(ctx, &ctx->strmapNodePool, sizeof(ST_StringMap_Entry), 512);
-    ST_Pool_init(ctx, &ctx->classPool, sizeof(ST_Class), 100);
-    ST_Pool_init(ctx, &ctx->integerPool, sizeof(ST_Integer), 128);
-    ctx->operandStack.base = ST_alloc(ctx, sizeof(ST_Internal_Object *) *
-                                               config->memory.stackCapacity);
-    ctx->operandStack.top =
-        (struct ST_Internal_Object **)ctx->operandStack.base;
-    ST_Internal_Context_bootstrap(ctx);
-    ST_initObject(ctx);
-    ST_initNil(ctx);
-    ST_initBoolean(ctx);
-    ST_initErrorHandling(ctx);
-    ST_initInteger(ctx);
-    ST_initArray(ctx);
-    ST_GC_resume(ctx);
-    return ctx;
-}
-
-void ST_destroyContext(ST_Context ctx) {
-    ST_Internal_Context *ctxImpl = ctx;
-    while (ctxImpl->globalScope) {
-        ST_BST_Node *removedGVar =
-            ST_BST_remove((ST_BST_Node **)&ctxImpl->globalScope,
-                          ctxImpl->globalScope, ST_SymbolMap_comparator);
-        ST_Pool_free(ctx, &ctxImpl->gvarNodePool, removedGVar);
-    }
-    while (ctxImpl->symbolRegistry) {
-        ST_StringMap_Entry *removedSymb = (ST_StringMap_Entry *)ST_BST_remove(
-            (ST_BST_Node **)&ctxImpl->symbolRegistry, ctxImpl->symbolRegistry,
-            ST_StringMap_comparator);
-        ST_Object_unsetGCMask(removedSymb->value, ST_GC_MASK_PRESERVE);
-        ST_free(ctx, removedSymb->key);
-        ST_Pool_free(ctx, &ctxImpl->strmapNodePool, removedSymb);
-    }
-    ST_Object_unsetGCMask(ctxImpl->nilValue, ST_GC_MASK_PRESERVE);
-    ST_Object_unsetGCMask(ctxImpl->trueValue, ST_GC_MASK_PRESERVE);
-    ST_Object_unsetGCMask(ctxImpl->falseValue, ST_GC_MASK_PRESERVE);
-    ctxImpl->operandStack.top =
-        (struct ST_Internal_Object **)ctxImpl->operandStack.base;
-    ST_GC_run(ctx);
-    ST_free(ctx, ctxImpl->operandStack.base);
-    ST_Pool_release(ctx, &ctxImpl->gvarNodePool);
-    ST_Pool_release(ctx, &ctxImpl->vmFramePool);
-    ST_Pool_release(ctx, &ctxImpl->methodNodePool);
-    ST_Pool_release(ctx, &ctxImpl->strmapNodePool);
-    ST_Pool_release(ctx, &ctxImpl->classPool);
-    ST_Pool_release(ctx, &ctxImpl->integerPool);
-    while (ctxImpl->sharedPools) {
-        ST_Pool_release(ctx, &ctxImpl->sharedPools->pool);
-        ST_free(ctx, ctxImpl->sharedPools);
-        ctxImpl->sharedPools = ctxImpl->sharedPools->next;
-    }
-    ST_free(ctx, ctx);
 }
