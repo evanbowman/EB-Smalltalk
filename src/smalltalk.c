@@ -1417,18 +1417,6 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *ctx) {
     return true;
 }
 
-static ST_Object ST_ifTrueImplForTrue(ST_Context ctx, ST_Object self,
-                                      ST_Object argv[]) {
-    ST_Object valueSymbol = ST_symb(ctx, "value");
-    return ST_sendMsg(ctx, argv[0], valueSymbol, 0, NULL);
-}
-
-static ST_Object ST_ifFalseImplForFalse(ST_Context ctx, ST_Object self,
-                                        ST_Object argv[]) {
-    ST_Object valueSymbol = ST_symb(ctx, "value");
-    return ST_sendMsg(ctx, argv[0], valueSymbol, 0, NULL);
-}
-
 static void ST_initNil(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, 0, 0);
@@ -1442,13 +1430,7 @@ static void ST_initBoolean(ST_Internal_Context *ctx) {
     ST_Object cBoolean = ST_Class_subclass(ctx, cObj, 0, 0);
     ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, 0, 0);
     ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, 0, 0);
-    ST_Object ifTrueSymb = ST_symb(ctx, "ifTrue:");
-    ST_Object ifFalseSymb = ST_symb(ctx, "ifFalse:");
     ST_Object newSymb = ST_symb(ctx, "new");
-    ST_setMethod(ctx, cTrue, ifTrueSymb, ST_ifTrueImplForTrue, 1);
-    ST_setMethod(ctx, cTrue, ifFalseSymb, ST_nopMethod, 1);
-    ST_setMethod(ctx, cFalse, ifTrueSymb, ST_nopMethod, 1);
-    ST_setMethod(ctx, cFalse, ifFalseSymb, ST_ifFalseImplForFalse, 1);
     ctx->trueValue = ST_sendMsg(ctx, cTrue, newSymb, 0, NULL);
     ctx->falseValue = ST_sendMsg(ctx, cFalse, newSymb, 0, NULL);
     ST_Object_setGCMask(ctx->trueValue, ST_GC_MASK_PRESERVE);
