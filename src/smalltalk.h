@@ -56,6 +56,11 @@ typedef struct ST_Context_Configuration {
     } memory;
 } ST_Context_Configuration;
 
+#define ST_DEFAULT_CONFIG                                                      \
+    {                                                                          \
+        { malloc, free, memcpy, memset, 1024 }                                 \
+    }
+
 ST_Context ST_createContext(const ST_Context_Configuration *config);
 void ST_destroyContext(ST_Context context);
 

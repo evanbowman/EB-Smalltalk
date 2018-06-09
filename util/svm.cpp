@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <stdlib.h>
 #include "../src/smalltalk.h"
 
 /* Standalone version of the vm & runtime */
@@ -10,7 +11,7 @@ int main(int argc, char **argv) {
         puts("usage: svm [file]");
         return EXIT_FAILURE;
     }
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
+    ST_Context_Configuration config = ST_DEFAULT_CONFIG;
     ST_Context context = ST_createContext(&config);
     std::ifstream input(argv[1], std::ios::binary);
     std::stringstream buffer;
