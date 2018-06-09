@@ -5,6 +5,7 @@
 %option nounput
 %option noinput
 %option noyywrap
+%option never-interactive
 
 %%
 "("             { return ST_TOK_LPAREN;    }
