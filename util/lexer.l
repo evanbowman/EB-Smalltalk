@@ -1,6 +1,5 @@
 %{
 #include "tokens.h"
-int fileno(FILE *stream);
 %}
 
 %option nounput
