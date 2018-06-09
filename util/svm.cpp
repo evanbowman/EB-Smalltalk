@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdlib.h>
+#include <string.h>
 #include "../src/smalltalk.h"
 
 /* Standalone version of the vm & runtime */
