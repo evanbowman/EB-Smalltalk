@@ -22,6 +22,9 @@ int testClass(ST_Context context) {
     if (widjetsClass != widjetClass) {
         return EXIT_FAILURE;
     }
+
+    ST_destroyContext(context);
+
     return EXIT_SUCCESS;
 }
 

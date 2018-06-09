@@ -63,11 +63,11 @@ const char *ST_Symbol_toString(ST_Context context, ST_Object symbol);
 
 typedef struct ST_Code {
     ST_Object *symbTab;
-    ST_Size symbTabSize;
     ST_U8 *instructions;
     ST_Size length;
 } ST_Code;
 
+ST_Code ST_VM_load(ST_Context context, const ST_U8 *data, ST_Size len);
 void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
 
 #endif /* SMALLTALK_H */

@@ -17,6 +17,7 @@ static ST_Size ST_stackSize(struct ST_Internal_Context *ctx);
    ST_free directly. */
 static void *ST_alloc(ST_Context ctx, ST_Size size);
 static void ST_memset(ST_Context ctx, void *memory, int val, ST_Size n);
+static void ST_memcpy(ST_Context ctx, void *dest, const void *src, ST_Size n);
 static void ST_free(ST_Context ctx, void *memory);
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -650,6 +651,10 @@ static void ST_free(ST_Context ctx, void *memory) {
     ((ST_Internal_Context *)ctx)->config.memory.freeFn(memory);
 }
 
+static void ST_memcpy(ST_Context ctx, void *dest, const void *src, ST_Size n) {
+    ((ST_Internal_Context *)ctx)->config.memory.copyFn(dest, src, n);
+}
+
 static void ST_memset(ST_Context ctx, void *memory, int val, ST_Size n) {
     ((ST_Internal_Context *)ctx)->config.memory.setFn(memory, val, n);
 }
@@ -680,7 +685,7 @@ static void ST_popStack(struct ST_Internal_Context *ctx) {
 }
 
 static ST_Object ST_refStack(struct ST_Internal_Context *ctx, ST_Size offset) {
-    return *(ctx->operandStack.top - offset);
+    return *(ctx->operandStack.top - (offset + 1));
 }
 
 static ST_Size ST_stackSize(struct ST_Internal_Context *ctx) {
@@ -797,24 +802,7 @@ const char *ST_Symbol_toString(ST_Context ctx, ST_Object symbol) {
 // VM
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef enum ST_VM_Opcode {
-    ST_VM_OP_GETGLOBAL,
-    ST_VM_OP_SETGLOBAL,
-    ST_VM_OP_PUSHNIL,
-    ST_VM_OP_PUSHTRUE,
-    ST_VM_OP_PUSHFALSE,
-    ST_VM_OP_PUSHSUPER,
-    ST_VM_OP_PUSHSYMBOL,
-    ST_VM_OP_SENDMSG,
-    ST_VM_OP_SETMETHOD,
-    ST_VM_OP_RETURN,
-    ST_VM_OP_GETIVAR,
-    ST_VM_OP_SETIVAR,
-    ST_VM_OP_DUP,
-    ST_VM_OP_POP,
-    ST_VM_OP_SWAP,
-    ST_VM_OP_COUNT
-} ST_VM_Opcode;
+#include "opcode.h"
 
 static void ST_VM_invokePrimitiveMethod_NArg(ST_Internal_Context *ctx,
                                              ST_Object receiver,
@@ -835,6 +823,7 @@ typedef struct ST_VM_Frame {
     struct ST_VM_Frame *parent;
 } ST_VM_Frame;
 
+/* TODO: do byte swap @ load time */
 static ST_U16 ST_readLE16(const ST_VM_Frame *f, ST_Size offset) {
     const ST_U8 *base = f->code->instructions + f->ip + offset;
     return ((ST_U16)*base) | ((ST_U16) * (base + 1) << 8);
@@ -906,7 +895,6 @@ static void ST_Internal_VM_execute(ST_Internal_Context *ctx,
             frame->ip += ST_OPCODE_SIZE;
         } break;
 
-
         case ST_VM_OP_PUSHSYMBOL:
             ST_pushStack(ctx, frame->code->symbTab[ST_readLE16(frame, 1)]);
             frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
@@ -916,8 +904,8 @@ static void ST_Internal_VM_execute(ST_Internal_Context *ctx,
             const ST_Object symbol =
                 frame->code->symbTab[ST_readLE16(frame, 1)];
             ST_Object receiver = ST_refStack(ctx, 0);
-            ST_Internal_Method *method =
-                ST_Internal_Object_getMethod(ctx, receiver, symbol);
+            ST_Internal_Method *method;
+            method = ST_Internal_Object_getMethod(ctx, receiver, symbol);
             frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
             if (method) {
                 switch (method->type) {
@@ -1262,13 +1250,6 @@ static ST_Object ST_class(ST_Context ctx, ST_Object self, ST_Object argv[]) {
     return ((ST_Internal_Object *)self)->class;
 }
 
-static ST_Object ST_doesNotUnderstand(ST_Context ctx, ST_Object self,
-                                      ST_Object argv[]) {
-    while (1)
-        ;
-    return ST_getNil(ctx);
-}
-
 static bool ST_Internal_Context_bootstrap(ST_Internal_Context *ctx) {
     /* We need to do things manually for a bit, until we've defined the
  symbol class and the new method, because most of the functions in
@@ -1342,8 +1323,6 @@ static void ST_initErrorHandling(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Object cMNU = ST_Class_subclass(ctx, cObj, 0, 0);
     ST_setGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"), cMNU);
-    ST_setMethod(ctx, cObj, ST_symb(ctx, "doesNotUnderstand:"),
-                 ST_doesNotUnderstand, 1);
 }
 
 ST_Context ST_createContext(const ST_Context_Configuration *config) {
@@ -1529,4 +1508,34 @@ void ST_GC_pause(ST_Context ctx) {
 
 void ST_GC_resume(ST_Context ctx) {
     ((ST_Internal_Context *)ctx)->gcPaused = false;
+}
+
+/*//////////////////////////////////////////////////////////////////////////////
+// Bytecode loading
+/////////////////////////////////////////////////////////////////////////////*/
+
+ST_Code ST_VM_load(ST_Context ctx, const ST_U8 *data, ST_Size len) {
+    /* Note: symbol table is a list of null-terminated symbol strings, where
+       the final symbol in the table is followed by two terminators. */
+    ST_Code code;
+    ST_Size i, symbCount = 0;
+    for (i = 0;; ++i) {
+        if (data[i] == '\0') {
+            symbCount += 1;
+            if (data[i + 1] == '\0') {
+                break;
+            }
+        }
+    }
+    len -= i + 1;
+    code.symbTab = ST_alloc(ctx, sizeof(ST_Object) * symbCount);
+    for (i = 0; i < symbCount; ++i) {
+        code.symbTab[i] = ST_symb(ctx, (const char *)data);
+        data += ST_strlen((const char *)data) + 1;
+    }
+    ++data;
+    code.length = len;
+    code.instructions = ST_alloc(ctx, len);
+    ST_memcpy(ctx, code.instructions, data, len);
+    return code;
 }

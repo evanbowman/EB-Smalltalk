@@ -11,7 +11,7 @@ set(PROJECT_TEST_DIR ../test/)
 add_library(smalltalk ${PROJECT_SOURCE_DIR}smalltalk.c)
 
 target_compile_options(smalltalk
-  PRIVATE "-nostdlib"
+#  PRIVATE "-nostdlib"
   PRIVATE "-Os")
 
 option(UNIT "run unit tests")
@@ -39,3 +39,17 @@ if(AUTOFORMAT)
     ${PROJECT_SOURCE_DIR}*.c ${PROJECT_SOURCE_DIR}*.h
     ${PROJECT_TEST_DIR}*.c)
 endif(AUTOFORMAT)
+
+
+set(CMAKE_CXX_FLAGS "-std=c++11")
+find_package(FLEX)
+FLEX_TARGET(flex-lexer ../util/lexer.l ../util/lexer.c)
+add_library(lexer ../util/lexer.c)
+add_executable(scc ../util/scc.cpp)
+target_link_libraries(scc lexer)
+
+add_executable(svm ../util/svm.cpp)
+target_link_libraries(svm smalltalk)
+
+add_executable(bcprinter ../util/bytecodePrinter.cpp)
+target_link_libraries(bcprinter smalltalk)
