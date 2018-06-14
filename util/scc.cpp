@@ -96,6 +96,27 @@ void parseExpression(Lexer& lexer) {
     }
 }
 
+void error(const std::string& err) {
+    std::cerr << "error: " << err << std::endl;
+    exit(1);
+}
+
+void parseLocalVars(Lexer& lexer) {
+    Lexer::Token tok;
+    while ((tok = lexer.lex()).id != ST_TOK_BAR) {
+        if (tok.id != ST_TOK_IDENT) {
+            error("expected identifier");
+        }
+    }
+}
+
+void parseLine(Lexer& lexer) {
+    const auto tok = lexer.lex();
+    if (tok.id == ST_TOK_BAR) {
+        parseLocalVars(lexer);
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) {
         std::cerr << "usage: scc [file]" << std::endl;
@@ -104,7 +125,7 @@ int main(int argc, char** argv) {
 
     { // TEST
         Lexer lexer(argv[1]);
-        parseExpression(lexer);
+        parseLine(lexer);
         BytecodeBuilder builder;
         builder.getGlobal("Object");
         builder.setGlobal("ObjectClone");

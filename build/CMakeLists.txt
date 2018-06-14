@@ -11,7 +11,7 @@ set(PROJECT_TEST_DIR ../test/)
 add_library(smalltalk ${PROJECT_SOURCE_DIR}smalltalk.c)
 
 target_compile_options(smalltalk
-#  PRIVATE "-nostdlib"
+  PRIVATE "-nostdlib"
   PRIVATE "-Os")
 
 option(UNIT "run unit tests")

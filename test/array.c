@@ -57,6 +57,8 @@ int testArray(ST_Context context) {
         return EXIT_FAILURE;
     }
 
+    ST_GC_run(context);
+
     ST_destroyContext(context);
 
     return EXIT_SUCCESS;

@@ -500,6 +500,7 @@ typedef struct ST_Class {
     struct ST_Class *super;
     ST_U16 instanceVariableCount;
     ST_Object *instanceVariableNames;
+    ST_Object name;
     ST_Pool *instancePool;
 } ST_Class;
 
@@ -520,22 +521,24 @@ ST_Internal_Object *ST_Class_makeInstance(ST_Internal_Context *ctx,
     return instance;
 }
 
-static ST_Class *ST_Class_subclass(ST_Internal_Context *ctx, ST_Class *class,
+static ST_Class *ST_Class_subclass(ST_Internal_Context *ctx, ST_Class *super,
+                                   ST_Object nameSymb,
                                    ST_Size instanceVariableCount,
                                    ST_Size classVariableCount) {
     ST_Class *sub =
         ST_Pool_alloc(ctx, &((ST_Internal_Context *)ctx)->classPool);
     sub->object.class = sub;
     ST_Object_setGCMask(sub, ST_GC_MASK_ALIVE);
-    sub->super = class;
+    sub->super = super;
     sub->instanceVariableCount =
-        ((ST_Class *)class)->instanceVariableCount + instanceVariableCount;
+        ((ST_Class *)super)->instanceVariableCount + instanceVariableCount;
     if (instanceVariableCount) {
         sub->instanceVariableNames =
             ST_alloc(ctx, instanceVariableCount * sizeof(ST_Internal_Object *));
     } else {
         sub->instanceVariableNames = NULL;
     }
+    sub->name = nameSymb;
     sub->methodTree = NULL;
     sub->instancePool =
         ST_getSharedInstancePool(ctx, sub->instanceVariableCount);
@@ -823,90 +826,101 @@ typedef struct ST_VM_Frame {
     struct ST_VM_Frame *parent;
 } ST_VM_Frame;
 
-/* TODO: do byte swap @ load time */
-static ST_U16 ST_readLE16(const ST_VM_Frame *f, ST_Size offset) {
-    const ST_U8 *base = f->code->instructions + f->ip + offset;
-    return ((ST_U16)*base) | ((ST_U16) * (base + 1) << 8);
+/* Note: ST_readLE[n] used to do a byteswap, but it happens at load time now. */
+static ST_U16 ST_readLE16(ST_VM_Frame *f) {
+    const ST_U16 rt = *(ST_U16 *)(f->code->instructions + f->ip);
+    f->ip += sizeof(ST_U16);
+    return rt;
 }
 
-static ST_U32 ST_readLE32(const ST_VM_Frame *f, ST_Size offset) {
-    const ST_U8 *base = f->code->instructions + f->ip + offset;
-    return ((ST_U32)*base) | ((ST_U32) * (base + 1) << 8) |
-           ((ST_U32) * (base + 2) << 16) | ((ST_U32) * (base + 3) << 24);
+static ST_U32 ST_readLE32(ST_VM_Frame *f) {
+    const ST_U32 rt = *(ST_U32 *)(f->code->instructions + f->ip);
+    f->ip += sizeof(ST_U32);
+    return rt;
 }
-
-enum { ST_OPCODE_SIZE = sizeof(ST_U8) };
 
 static void ST_Internal_VM_execute(ST_Internal_Context *ctx,
                                    ST_VM_Frame *frame) {
     while (frame->ip < frame->code->length) {
-        switch (frame->code->instructions[frame->ip]) {
-        case ST_VM_OP_GETGLOBAL: {
-            ST_Object gVarSymb = frame->code->symbTab[ST_readLE16(frame, 1)];
-            ST_Object global = ST_getGlobal(ctx, gVarSymb);
-            ST_pushStack(ctx, global);
-            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
-        } break;
-
-        case ST_VM_OP_SETGLOBAL: {
-            ST_Object gVarSymb = frame->code->symbTab[ST_readLE16(frame, 1)];
-            ST_setGlobal(ctx, gVarSymb, ST_refStack(ctx, 0));
-            ST_popStack(ctx);
-            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
-        } break;
-
-        case ST_VM_OP_GETIVAR: {
-            ST_U16 ivarIndex = ST_readLE16(frame, 1);
-            ST_Object target = ST_refStack(ctx, 0);
-            ST_popStack(ctx);
-            ST_pushStack(ctx, ST_Object_getIVars(target)[ivarIndex]);
-            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
-        } break;
-
-        case ST_VM_OP_SETIVAR: {
-            ST_U16 ivarIndex = ST_readLE16(frame, 1);
-            ST_Object target = ST_refStack(ctx, 0);
-            ST_Object value = ST_refStack(ctx, 1);
-            ST_popStack(ctx);
-            ST_popStack(ctx);
-            ST_Object_getIVars(target)[ivarIndex] = value;
-            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
-        } break;
-
+        switch (frame->code->instructions[frame->ip++]) {
         case ST_VM_OP_PUSHNIL:
             ST_pushStack(ctx, ST_getNil(ctx));
-            frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHTRUE:
             ST_pushStack(ctx, ST_getTrue(ctx));
-            frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHFALSE:
             ST_pushStack(ctx, ST_getFalse(ctx));
-            frame->ip += ST_OPCODE_SIZE;
             break;
 
         case ST_VM_OP_PUSHSUPER: {
             ST_Internal_Object *obj = ST_refStack(ctx, 0);
             ST_popStack(ctx);
             ST_pushStack(ctx, obj->class->super);
-            frame->ip += ST_OPCODE_SIZE;
         } break;
 
-        case ST_VM_OP_PUSHSYMBOL:
-            ST_pushStack(ctx, frame->code->symbTab[ST_readLE16(frame, 1)]);
-            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
+        case ST_VM_OP_DUP: {
+            ST_pushStack(ctx, ST_refStack(ctx, 0));
+        } break;
+
+        case ST_VM_OP_POP: {
+            ST_popStack(ctx);
             break;
+        }
+
+        case ST_VM_OP_RETURN: {
+            ST_VM_Frame *completeFrame = frame;
+            ST_Object ret = ST_refStack(ctx, 0);
+            ST_Size i;
+            const ST_Size stackDiff = frame->bp - frame->parent->bp;
+            if (frame->bp < frame->parent->bp) {
+                /* FIXME */
+            }
+            for (i = 0; i < stackDiff; ++i) {
+                ST_popStack(ctx);
+            }
+            ST_pushStack(ctx, ret);
+            frame = frame->parent;
+            ST_Pool_free(ctx, &ctx->vmFramePool, completeFrame);
+            /* NOTE: we jumped frames, reverting back to the instruction pointer
+               before the call, which is why we don't increment frame->ip. */
+        } break;
+
+        case ST_VM_OP_GETGLOBAL: {
+            ST_Object gVarSymb = frame->code->symbTab[ST_readLE16(frame)];
+            ST_Object global = ST_getGlobal(ctx, gVarSymb);
+            ST_pushStack(ctx, global);
+        } break;
+
+        case ST_VM_OP_SETGLOBAL: {
+            ST_Object gVarSymb = frame->code->symbTab[ST_readLE16(frame)];
+            ST_setGlobal(ctx, gVarSymb, ST_refStack(ctx, 0));
+            ST_popStack(ctx);
+        } break;
+
+        case ST_VM_OP_GETIVAR: {
+            ST_U16 ivarIndex = ST_readLE16(frame);
+            ST_Object target = ST_refStack(ctx, 0);
+            ST_popStack(ctx);
+            ST_pushStack(ctx, ST_Object_getIVars(target)[ivarIndex]);
+        } break;
+
+        case ST_VM_OP_SETIVAR: {
+            ST_U16 ivarIndex = ST_readLE16(frame);
+            ST_Object target = ST_refStack(ctx, 0);
+            ST_Object value = ST_refStack(ctx, 1);
+            ST_popStack(ctx);
+            ST_popStack(ctx);
+            ST_Object_getIVars(target)[ivarIndex] = value;
+        } break;
 
         case ST_VM_OP_SENDMSG: {
-            const ST_Object symbol =
-                frame->code->symbTab[ST_readLE16(frame, 1)];
+            const ST_Object symbol = frame->code->symbTab[ST_readLE16(frame)];
             ST_Object receiver = ST_refStack(ctx, 0);
             ST_Internal_Method *method;
             method = ST_Internal_Object_getMethod(ctx, receiver, symbol);
-            frame->ip += ST_OPCODE_SIZE + sizeof(ST_U16);
             if (method) {
                 switch (method->type) {
                 case ST_METHOD_TYPE_PRIMITIVE:
@@ -929,15 +943,18 @@ static void ST_Internal_VM_execute(ST_Internal_Context *ctx,
             }
         } break;
 
+        case ST_VM_OP_PUSHSYMBOL:
+            ST_pushStack(ctx, frame->code->symbTab[ST_readLE16(frame)]);
+            break;
+
+        /* TODO: re-verify that this still works */
         case ST_VM_OP_SETMETHOD: {
-            const ST_Object symbol =
-                frame->code->symbTab[ST_readLE16(frame, 1)];
+            const ST_Object symbol = frame->code->symbTab[ST_readLE16(frame)];
             const ST_Object target = ST_refStack(ctx, 0);
-            const ST_U8 argc = frame->code->instructions[frame->ip + 3];
+            const ST_U8 argc = frame->code->instructions[frame->ip++];
             ST_MethodMap_Entry *entry =
                 ST_Pool_alloc(ctx, &ctx->methodNodePool);
             ST_BST_Node_init((ST_BST_Node *)entry);
-            frame->ip += sizeof(ST_U8) + sizeof(ST_U16);
             entry->header.symbol = symbol;
             entry->method.type = ST_METHOD_TYPE_COMPILED;
             entry->method.argc = argc;
@@ -948,39 +965,8 @@ static void ST_Internal_VM_execute(ST_Internal_Context *ctx,
                 ST_Pool_free(ctx, &ctx->methodNodePool, entry);
             }
             ST_popStack(ctx);
-            frame->ip +=
-                ST_readLE32(frame, 1) + sizeof(ST_U32) + ST_OPCODE_SIZE;
+            frame->ip += ST_readLE32(frame);
         } break;
-
-        case ST_VM_OP_RETURN: {
-            ST_VM_Frame *completeFrame = frame;
-            ST_Object ret = ST_refStack(ctx, 0);
-            ST_Size i;
-            const ST_Size stackDiff = frame->bp - frame->parent->bp;
-            if (frame->bp < frame->parent->bp) {
-                /* FIXME */
-            }
-            for (i = 0; i < stackDiff; ++i) {
-                ST_popStack(ctx);
-            }
-            ST_pushStack(ctx, ret);
-            frame = frame->parent;
-            ST_Pool_free(ctx, &ctx->vmFramePool, completeFrame);
-            /* NOTE: we jumped frames, reverting back to the instruction pointer
-   before the call, which is why we don't increment frame->ip. */
-        } break;
-
-        case ST_VM_OP_DUP: {
-            ST_Object top = ST_refStack(ctx, 0);
-            ST_pushStack(ctx, top);
-            frame->ip += ST_OPCODE_SIZE;
-        } break;
-
-        case ST_VM_OP_POP: {
-            ST_popStack(ctx);
-            frame->ip += ST_OPCODE_SIZE;
-            break;
-        }
 
         default:
             return; /* FIXME */
@@ -1001,7 +987,7 @@ void ST_VM_execute(ST_Context ctx, const ST_Code *code, ST_Size offset) {
 // Integer
 /////////////////////////////////////////////////////////////////////////////*/
 
-static const char *ST_subcMethodName = "subclass";
+static const char *ST_subcMethodName = "subclass:";
 static const char *ST_subcExtMethodName =
     "subclass:instanceVariableNames:classVariableNames:";
 
@@ -1075,12 +1061,14 @@ static ST_Object ST_Integer_rawSet(ST_Context ctx, ST_Object self,
 static void ST_initInteger(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Class *cInt = ST_Pool_alloc(ctx, &ctx->classPool);
+    ST_Object intSymb = ST_symb(ctx, "Integer");
     cInt->instanceVariableCount = 0;
     cInt->instanceVariableNames = NULL;
     cInt->instancePool = &ctx->integerPool;
     cInt->methodTree = NULL;
     cInt->super = cObj;
     cInt->object.class = cInt;
+    cInt->name = intSymb;
     ST_Object_setGCMask(cInt, ST_GC_MASK_ALIVE);
     ST_setMethod(ctx, cInt, ST_symb(ctx, "+"), ST_Integer_add, 1);
     ST_setMethod(ctx, cInt, ST_symb(ctx, "-"), ST_Integer_sub, 1);
@@ -1088,10 +1076,10 @@ static void ST_initInteger(ST_Internal_Context *ctx) {
     ST_setMethod(ctx, cInt, ST_symb(ctx, "/"), ST_Integer_div, 1);
     ST_setMethod(ctx, cInt, ST_symb(ctx, "rawSet:"), ST_Integer_rawSet, 1);
     ST_setMethod(ctx, cInt, ST_symb(ctx, "rawGet"), ST_Integer_rawGet, 0);
-    ST_setMethod(ctx, cInt, ST_symb(ctx, ST_subcMethodName), ST_nopMethod, 0);
+    ST_setMethod(ctx, cInt, ST_symb(ctx, ST_subcMethodName), ST_nopMethod, 1);
     ST_setMethod(ctx, cInt, ST_symb(ctx, ST_subcExtMethodName), ST_nopMethod,
                  3);
-    ST_setGlobal(ctx, ST_symb(ctx, "Integer"), cInt);
+    ST_setGlobal(ctx, intSymb, cInt);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -1188,18 +1176,20 @@ static ST_Object ST_Array_len(ST_Context ctx, ST_Object self,
 
 static void ST_initArray(ST_Internal_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Class *cArr = ST_Class_subclass(ctx, cObj, 2, 0);
-    ST_Class *cNode = ST_Class_subclass(ctx, cObj, 2, 0);
+    ST_Object arraySymb = ST_symb(ctx, "Array");
+    ST_Object listNodeSymb = ST_symb(ctx, "ListNode");
+    ST_Class *cArr = ST_Class_subclass(ctx, cObj, arraySymb, 2, 0);
+    ST_Class *cNode = ST_Class_subclass(ctx, cObj, listNodeSymb, 2, 0);
     cArr->instanceVariableNames[0] = ST_symb(ctx, "data");
     cArr->instanceVariableNames[1] = ST_symb(ctx, "length");
     cNode->instanceVariableNames[0] = ST_symb(ctx, "next");
     cNode->instanceVariableNames[1] = ST_symb(ctx, "element");
-    ST_setGlobal(ctx, ST_symb(ctx, "ListNode"), cNode);
+    ST_setGlobal(ctx, listNodeSymb, cNode);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "length"), ST_Array_len, 0);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "new:"), ST_Array_new, 1);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "at:"), ST_Array_at, 1);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "at:put:"), ST_Array_set, 2);
-    ST_setGlobal(ctx, ST_symb(ctx, "Array"), cArr);
+    ST_setGlobal(ctx, arraySymb, cArr);
 }
 
 /*//////////////////////////////////////////////////////////////////////////////
@@ -1212,7 +1202,7 @@ static ST_Object ST_new(ST_Context ctx, ST_Object self, ST_Object argv[]) {
 }
 
 static ST_Object ST_subclass(ST_Context ctx, ST_Object self, ST_Object argv[]) {
-    return ST_Class_subclass(ctx, self, 0, 0);
+    return ST_Class_subclass(ctx, self, argv[0], 0, 0);
 }
 
 static ST_Object ST_subclassExtended(ST_Context ctx, ST_Object self,
@@ -1234,7 +1224,7 @@ static ST_Object ST_subclassExtended(ST_Context ctx, ST_Object self,
             (intptr_t)ST_sendMsg(ctx, cvarNamesLength, rawgetSymb, 0, NULL);
         ST_Object index = ST_sendMsg(ctx, cInteger, newSymb, 0, NULL);
         ST_Integer_Rep i;
-        subc = ST_Class_subclass(ctx, self, ivarCount, cvarCount);
+        subc = ST_Class_subclass(ctx, self, argv[0], ivarCount, cvarCount);
         for (i = 0; i < ivarCount; ++i) {
             ST_Object ivarName;
             ST_sendMsg(ctx, index, rawsetSymb, 1, (ST_Object)&i);
@@ -1266,7 +1256,7 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *ctx) {
     cObject->instanceVariableCount = 0;
     cObject->instanceVariableNames = NULL;
     cObject->instancePool = ST_getSharedInstancePool(ctx, 0);
-    cSymbol = ST_Class_subclass(ctx, cObject, 0, 0);
+    cSymbol = ST_Class_subclass(ctx, cObject, NULL, 0, 0);
     symbolSymbol = ST_Class_makeInstance(ctx, cSymbol);
     newSymbol = ST_Class_makeInstance(ctx, cSymbol);
     ST_Object_setGCMask(symbolSymbol, ST_GC_MASK_PRESERVE);
@@ -1290,30 +1280,34 @@ static bool ST_Internal_Context_bootstrap(ST_Internal_Context *ctx) {
 
 static void ST_initNil(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, 0, 0);
+    ST_Object undefObjSymb = ST_symb(ctx, "UndefinedObject");
+    ST_Object cUndefObj = ST_Class_subclass(ctx, cObj, undefObjSymb, 0, 0);
     ctx->nilValue = ST_sendMsg(ctx, cUndefObj, ST_symb(ctx, "new"), 0, NULL);
     ST_Object_setGCMask(ctx->nilValue, ST_GC_MASK_PRESERVE);
-    ST_setGlobal(ctx, ST_symb(ctx, "UndefinedObject"), cUndefObj);
+    ST_setGlobal(ctx, undefObjSymb, cUndefObj);
 }
 
 static void ST_initBoolean(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cBoolean = ST_Class_subclass(ctx, cObj, 0, 0);
-    ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, 0, 0);
-    ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, 0, 0);
+    ST_Object boolSymb = ST_symb(ctx, "Boolean");
+    ST_Object trueSymb = ST_symb(ctx, "True");
+    ST_Object falseSymb = ST_symb(ctx, "False");
+    ST_Object cBoolean = ST_Class_subclass(ctx, cObj, boolSymb, 0, 0);
+    ST_Object cTrue = ST_Class_subclass(ctx, cBoolean, trueSymb, 0, 0);
+    ST_Object cFalse = ST_Class_subclass(ctx, cBoolean, falseSymb, 0, 0);
     ST_Object newSymb = ST_symb(ctx, "new");
     ctx->trueValue = ST_sendMsg(ctx, cTrue, newSymb, 0, NULL);
     ctx->falseValue = ST_sendMsg(ctx, cFalse, newSymb, 0, NULL);
     ST_Object_setGCMask(ctx->trueValue, ST_GC_MASK_PRESERVE);
     ST_Object_setGCMask(ctx->falseValue, ST_GC_MASK_PRESERVE);
-    ST_setGlobal(ctx, ST_symb(ctx, "Boolean"), cBoolean);
-    ST_setGlobal(ctx, ST_symb(ctx, "True"), cTrue);
-    ST_setGlobal(ctx, ST_symb(ctx, "False"), cFalse);
+    ST_setGlobal(ctx, boolSymb, cBoolean);
+    ST_setGlobal(ctx, trueSymb, cTrue);
+    ST_setGlobal(ctx, falseSymb, cFalse);
 }
 
 static void ST_initObject(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcMethodName), ST_subclass, 0);
+    ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcMethodName), ST_subclass, 1);
     ST_setMethod(ctx, cObj, ST_symb(ctx, "class"), ST_class, 0);
     ST_setMethod(ctx, cObj, ST_symb(ctx, ST_subcExtMethodName),
                  ST_subclassExtended, 3);
@@ -1321,8 +1315,9 @@ static void ST_initObject(ST_Internal_Context *ctx) {
 
 static void ST_initErrorHandling(ST_Internal_Context *ctx) {
     ST_Object cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
-    ST_Object cMNU = ST_Class_subclass(ctx, cObj, 0, 0);
-    ST_setGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"), cMNU);
+    ST_Object mnuSymb = ST_symb(ctx, "MessageNotUnderstood");
+    ST_Object cMNU = ST_Class_subclass(ctx, cObj, mnuSymb, 0, 0);
+    ST_setGlobal(ctx, mnuSymb, cMNU);
 }
 
 ST_Context ST_createContext(const ST_Context_Configuration *config) {
@@ -1356,26 +1351,12 @@ ST_Context ST_createContext(const ST_Context_Configuration *config) {
 
 void ST_destroyContext(ST_Context ctx) {
     ST_Internal_Context *ctxImpl = ctx;
-    while (ctxImpl->globalScope) {
-        ST_BST_Node *removedGVar =
-            ST_BST_remove((ST_BST_Node **)&ctxImpl->globalScope,
-                          ctxImpl->globalScope, ST_SymbolMap_comparator);
-        ST_Pool_free(ctx, &ctxImpl->gvarNodePool, removedGVar);
-    }
     while (ctxImpl->symbolRegistry) {
         ST_StringMap_Entry *removedSymb = (ST_StringMap_Entry *)ST_BST_remove(
             (ST_BST_Node **)&ctxImpl->symbolRegistry, ctxImpl->symbolRegistry,
             ST_StringMap_comparator);
-        ST_Object_unsetGCMask(removedSymb->value, ST_GC_MASK_PRESERVE);
         ST_free(ctx, removedSymb->key);
-        ST_Pool_free(ctx, &ctxImpl->strmapNodePool, removedSymb);
     }
-    ST_Object_unsetGCMask(ctxImpl->nilValue, ST_GC_MASK_PRESERVE);
-    ST_Object_unsetGCMask(ctxImpl->trueValue, ST_GC_MASK_PRESERVE);
-    ST_Object_unsetGCMask(ctxImpl->falseValue, ST_GC_MASK_PRESERVE);
-    ctxImpl->operandStack.top =
-        (struct ST_Internal_Object **)ctxImpl->operandStack.base;
-    ST_GC_run(ctx);
     ST_free(ctx, ctxImpl->operandStack.base);
     ST_Pool_release(ctx, &ctxImpl->gvarNodePool);
     ST_Pool_release(ctx, &ctxImpl->vmFramePool);
@@ -1436,6 +1417,7 @@ static void ST_GC_mark(ST_Internal_Context *ctx) {
     visitor.visitor.visit = ST_GC_visitGVar;
     ST_BST_traverse((ST_BST_Node *)ctx->globalScope, (ST_Visitor *)&visitor);
 }
+
 
 static void ST_GC_sweepVisitInstance(ST_Visitor *visitor, void *instanceMem) {
     ST_Internal_Object *obj = instanceMem;
@@ -1514,6 +1496,23 @@ void ST_GC_resume(ST_Context ctx) {
 // Bytecode loading
 /////////////////////////////////////////////////////////////////////////////*/
 
+static bool isLittleEndian() {
+    const ST_U32 num = 1;
+    return ((ST_U8 *)&num)[0] == 1;
+}
+
+static void ST_bswap16(ST_U16 *mem) {
+    *mem = ((ST_U16)((((ST_U16)(*mem) & (ST_U16)0x00ffU) << 8) |
+                     (((ST_U16)(*mem) & (ST_U16)0xff00U) >> 8)));
+}
+
+static void ST_bswap32(ST_U32 *mem) {
+    *mem = ((ST_U32)((((ST_U32)(*mem) & (ST_U32)0x000000ffU) << 24) |
+                     (((ST_U32)(*mem) & (ST_U32)0x0000ff00U) << 8) |
+                     (((ST_U32)(*mem) & (ST_U32)0x00ff0000U) >> 8) |
+                     (((ST_U32)(*mem) & (ST_U32)0xff000000U) >> 24)));
+}
+
 ST_Code ST_VM_load(ST_Context ctx, const ST_U8 *data, ST_Size len) {
     /* Note: symbol table is a list of null-terminated symbol strings, where
        the final symbol in the table is followed by two terminators. */
@@ -1537,5 +1536,38 @@ ST_Code ST_VM_load(ST_Context ctx, const ST_U8 *data, ST_Size len) {
     code.length = len;
     code.instructions = ST_alloc(ctx, len);
     ST_memcpy(ctx, code.instructions, data, len);
+    if (!isLittleEndian()) {
+        for (i = 0; i < len; ++i) {
+            switch (code.instructions[i]) {
+            case ST_VM_OP_PUSHNIL:
+            case ST_VM_OP_PUSHTRUE:
+            case ST_VM_OP_PUSHFALSE:
+            case ST_VM_OP_PUSHSUPER:
+            case ST_VM_OP_DUP:
+            case ST_VM_OP_POP:
+            case ST_VM_OP_SWAP:
+            case ST_VM_OP_RETURN:
+                break;
+
+            case ST_VM_OP_GETGLOBAL:
+            case ST_VM_OP_SETGLOBAL:
+            case ST_VM_OP_SENDMSG:
+            case ST_VM_OP_GETIVAR:
+            case ST_VM_OP_SETIVAR:
+            case ST_VM_OP_PUSHSYMBOL:
+                ST_bswap16((ST_U16 *)&code.instructions[i + 1]);
+                i += sizeof(ST_U16);
+                break;
+
+            case ST_VM_OP_SETMETHOD: {
+                ST_bswap16((ST_U16 *)&code.instructions[i + 1]);
+                i += sizeof(ST_U16) + sizeof(ST_U8);
+                ST_bswap32((ST_U32 *)&code.instructions[i + 1]);
+                i += sizeof(ST_U32);
+                /* TODO */
+            } break;
+            }
+        }
+    }
     return code;
 }
