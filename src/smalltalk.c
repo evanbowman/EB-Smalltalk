@@ -1418,7 +1418,6 @@ static void ST_GC_mark(ST_Internal_Context *ctx) {
     ST_BST_traverse((ST_BST_Node *)ctx->globalScope, (ST_Visitor *)&visitor);
 }
 
-
 static void ST_GC_sweepVisitInstance(ST_Visitor *visitor, void *instanceMem) {
     ST_Internal_Object *obj = instanceMem;
     ST_Internal_Context *ctx = ((ST_GC_Visitor *)visitor)->ctx;

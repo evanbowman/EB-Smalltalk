@@ -42,11 +42,20 @@ endif(AUTOFORMAT)
 
 
 set(CMAKE_CXX_FLAGS "-std=c++11")
-find_package(FLEX)
-FLEX_TARGET(flex-lexer ../util/lexer.l ../util/lexer.c)
-add_library(lexer ../util/lexer.c)
-add_executable(scc ../util/scc.cpp)
-target_link_libraries(scc lexer)
+
+option(BUILD_COMPILER)
+if(BUILD_COMPILER)
+  set(SCC_SRC
+    ../util/scc.cpp
+    ../util/SmalltalkBaseListener.cpp
+    ../util/SmalltalkLexer.cpp
+    ../util/SmalltalkListener.cpp
+    ../util/SmalltalkParser.cpp)
+
+  add_executable(scc ${SCC_SRC})
+  target_link_libraries(scc antlr4-runtime)
+  target_include_directories(scc PRIVATE "/usr/local/include/antlr4-runtime")
+endif(BUILD_COMPILER)
 
 add_executable(svm ../util/svm.cpp)
 target_link_libraries(svm smalltalk)
