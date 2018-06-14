@@ -43,7 +43,7 @@ endif(AUTOFORMAT)
 
 set(CMAKE_CXX_FLAGS "-std=c++11")
 
-option(BUILD_COMPILER)
+option(BUILD_COMPILER "build the compiler utility")
 if(BUILD_COMPILER)
   set(SCC_SRC
     ../util/scc.cpp
