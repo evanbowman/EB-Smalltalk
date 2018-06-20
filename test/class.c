@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-int testClass(ST_Context context) {
+int testClass(ST_Object context) {
     ST_Object objSymb = ST_symb(context, "Object");
     ST_Object subcSymb = ST_symb(context, "subclass:");
     ST_Object classSymb = ST_symb(context, "class");
@@ -31,8 +31,7 @@ int testClass(ST_Context context) {
 }
 
 int main() {
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
-    ST_Context context = ST_createContext(&config);
-    ST_GC_pause(context);
+    ST_Configuration config = ST_DEFAULT_CONFIG;
+    ST_Object context = ST_createContext(&config);
     return testClass(context);
 }

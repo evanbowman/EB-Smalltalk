@@ -3,8 +3,8 @@
 #include <string.h>
 
 int main() {
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
-    ST_Context context = ST_createContext(&config);
+    ST_Configuration config = ST_DEFAULT_CONFIG;
+    ST_Object context = ST_createContext(&config);
     const char *testSymbStr = "TEST";
     ST_Object testSymb = ST_symb(context, testSymbStr);
     if (strcmp(ST_Symbol_toString(context, testSymb), testSymbStr) != 0) {

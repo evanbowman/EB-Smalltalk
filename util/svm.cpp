@@ -12,8 +12,8 @@ int main(int argc, char **argv) {
         puts("usage: svm [file]");
         return EXIT_FAILURE;
     }
-    ST_Context_Configuration config = ST_DEFAULT_CONFIG;
-    ST_Context context = ST_createContext(&config);
+    ST_Configuration config = ST_DEFAULT_CONFIG;
+    ST_Object context = ST_createContext(&config);
     std::ifstream input(argv[1], std::ios::binary);
     std::stringstream buffer;
     buffer << input.rdbuf();

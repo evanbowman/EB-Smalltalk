@@ -11,42 +11,49 @@ extern "C" {
 
 typedef size_t ST_Size;
 typedef void *ST_OpaqueStruct;
-typedef ST_OpaqueStruct ST_Context;
 typedef ST_OpaqueStruct ST_Object;
 typedef unsigned char ST_U8;
 typedef uint16_t ST_U16;
 typedef uint32_t ST_U32;
+typedef int32_t ST_S32;
 
-ST_Object ST_symb(ST_Context context, const char *symbolName);
+ST_Object ST_symb(ST_Object context, const char *symbolName);
 
-void ST_setGlobal(ST_Context context, ST_Object symbol, ST_Object value);
-ST_Object ST_getGlobal(ST_Context context, ST_Object symbol);
+void ST_setGlobal(ST_Object context, ST_Object symbol, ST_Object value);
+ST_Object ST_getGlobal(ST_Object context, ST_Object symbol);
 
-ST_Object ST_sendMsg(ST_Context context, ST_Object receiver, ST_Object symbol,
+ST_Object ST_sendMsg(ST_Object context, ST_Object receiver, ST_Object symbol,
                      ST_U8 argc, ST_Object argv[]);
 
-typedef ST_Object (*ST_Method)(ST_Context, ST_Object, ST_Object[]);
-void ST_setMethod(ST_Context context, ST_Object targetClass, ST_Object symbol,
+typedef ST_Object (*ST_Method)(ST_Object, ST_Object, ST_Object[]);
+void ST_setMethod(ST_Object context, ST_Object targetClass, ST_Object symbol,
                   ST_Method method, ST_U8 argc);
 
-ST_Object ST_getClass(ST_Context context, ST_Object object);
-ST_Object ST_getSuper(ST_Context context, ST_Object object);
-ST_Object ST_getNil(ST_Context context);
-ST_Object ST_getTrue(ST_Context context);
-ST_Object ST_getFalse(ST_Context context);
+/* Shortcuts, technically you could do all these with message sends though. */
+ST_Object ST_getClass(ST_Object context, ST_Object object);
+ST_Object ST_getSuper(ST_Object context, ST_Object object);
+ST_Object ST_getNil(ST_Object context);
+ST_Object ST_getTrue(ST_Object context);
+ST_Object ST_getFalse(ST_Object context);
+ST_Object ST_getInteger(ST_Object context, ST_S32 value);
+ST_S32 ST_unboxInt(ST_Object integer);
 
-void ST_GC_run(ST_Context context);
+/* Store the results of API calls in a local var array, to prevent the GC
+   from collecting your objects. Note that Symbol Objects returned by
+   ST_symb are not collected automatically, so you don't need to store them
+   in local arrays.
 
-/* GC_preserve() and GC_release() may be used to prevent the garbage collector
-   from collecting the result of the sendMsg() api call. Alternatively,
-   if you have a lot of local variables and preserve/release would be tedious,
-   you can temporarily disable the collector with GC_pause/resume. */
-void ST_GC_preserve(ST_Context context, ST_Object object);
-void ST_GC_release(ST_Context context, ST_Object object);
-void ST_GC_pause(ST_Context context);
-void ST_GC_resume(ST_Context context);
+   You might want to try this pattern:
+   enum { LOC_foo, LOC_bar, LOC_count };
+   ST_Object *locals = ST_pushLocals(ctx, LOC_count);
+   locals[LOC_foo] = ...
+   ... etc ...
+   ST_popLocals(ctx);
+*/
+ST_Object *ST_pushLocals(ST_Object ctx, ST_Size count);
+void ST_popLocals(ST_Object ctx);
 
-typedef struct ST_Context_Configuration {
+typedef struct ST_Configuration {
     struct Memory {
         void *(*allocFn)(size_t);
         void (*freeFn)(void *);
@@ -54,17 +61,17 @@ typedef struct ST_Context_Configuration {
         void *(*setFn)(void *, int c, size_t n);
         ST_Size stackCapacity;
     } memory;
-} ST_Context_Configuration;
+} ST_Configuration;
 
 #define ST_DEFAULT_CONFIG                                                      \
     {                                                                          \
         { malloc, free, memcpy, memset, 1024 }                                 \
     }
 
-ST_Context ST_createContext(const ST_Context_Configuration *config);
-void ST_destroyContext(ST_Context context);
+ST_Object ST_createContext(const ST_Configuration *config);
+void ST_destroyContext(ST_Object context);
 
-const char *ST_Symbol_toString(ST_Context context, ST_Object symbol);
+const char *ST_Symbol_toString(ST_Object context, ST_Object symbol);
 
 typedef struct ST_Code {
     ST_Object *symbTab;
@@ -72,8 +79,8 @@ typedef struct ST_Code {
     ST_Size length;
 } ST_Code;
 
-ST_Code ST_VM_load(ST_Context context, const ST_U8 *data, ST_Size len);
-void ST_VM_execute(ST_Context context, const ST_Code *code, ST_Size offset);
+ST_Code ST_VM_load(ST_Object context, const ST_U8 *data, ST_Size len);
+void ST_VM_execute(ST_Object context, const ST_Code *code, ST_Size offset);
 
 #endif /* SMALLTALK_H */
 

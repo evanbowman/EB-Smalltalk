@@ -14,8 +14,8 @@ int main(int argc, char** argv) {
         std::cerr << "usage: stbc-printer [file]" << std::endl;
         return EXIT_FAILURE;
     }
-    ST_Context_Configuration config = {{malloc, free, memcpy, memset, 1024}};
-    ST_Context context = ST_createContext(&config);
+    ST_Configuration config = ST_DEFAULT_CONFIG;
+    ST_Object context = ST_createContext(&config);
     std::ifstream input(argv[1], std::ios::binary);
     std::stringstream buffer;
     buffer << input.rdbuf();
