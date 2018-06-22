@@ -59,13 +59,16 @@ typedef struct ST_Configuration {
         void (*freeFn)(void *);
         void *(*copyFn)(void *, const void *, size_t);
         void *(*setFn)(void *, int c, size_t n);
+        /* Stack capacity in units of number of Object references */
         ST_Size stackCapacity;
+        /* Heap capacity in units of bytes */
+        ST_Size heapCapacity;
     } memory;
 } ST_Configuration;
 
 #define ST_DEFAULT_CONFIG                                                      \
     {                                                                          \
-        { malloc, free, memcpy, memset, 1024 }                                 \
+        { malloc, free, memcpy, memset, 1024, 10000 }                          \
     }
 
 ST_Object ST_createContext(const ST_Configuration *config);
