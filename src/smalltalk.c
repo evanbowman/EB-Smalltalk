@@ -582,9 +582,9 @@ static void ST_failedMethodLookup(ST_Object ctx, ST_Object receiver,
                                   ST_Object symbol) {
     ST_Object cMNU = ST_getGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"));
     ST_Object err = ST_sendMsg(ctx, cMNU, ST_symb(ctx, "new"), 0, NULL);
-    { /* FIXME 
+    { /* FIXME
          At the moment, we have not implemented doesNotUnderstand, so this
-         function will blow up the stack, but before it does that, it will 
+         function will blow up the stack, but before it does that, it will
          vm's heap by allocating tons of MessageNotUnderstoods. So busy wait
          for now.
       */
@@ -992,6 +992,23 @@ typedef struct ST_Integer {
     ST_S32 value;
 } ST_Integer;
 
+ST_S32 ST_unboxInt(ST_Object ctx, ST_Object integer) {
+    ST_Object rgetSymb = ST_symb(ctx, "rawGet");
+    return (intptr_t)ST_sendMsg(ctx, integer, rgetSymb, 0, NULL);
+}
+
+ST_Object ST_getInteger(ST_Object ctx, ST_S32 value) {
+    ST_Object cInt = ST_getGlobal(ctx, ST_symb(ctx, "Integer"));
+    ST_Object newSymb = ST_symb(ctx, "new");
+    ST_Object rsetSymb = ST_symb(ctx, "rawSet:");
+    ST_Object integer;
+    ST_Object args[1];
+    args[0] = (ST_Object)(intptr_t)value;
+    integer = ST_sendMsg(ctx, cInt, newSymb, 0, NULL);
+    ST_sendMsg(ctx, integer, rsetSymb, 1, args);
+    return integer;
+}
+
 static bool ST_Integer_typecheck(ST_Internal_Object *lhs,
                                  ST_Internal_Object *rhs) {
     return lhs->class == rhs->class;
@@ -1076,61 +1093,12 @@ static void ST_initInteger(ST_Context *ctx) {
 /////////////////////////////////////////////////////////////////////////////*/
 
 static ST_Object ST_Array_new(ST_Object ctx, ST_Object self, ST_Object argv[]) {
-    ST_Object result = ST_getNil(ctx);
     ST_Object rgetSymb = ST_symb(ctx, "rawGet");
     ST_Object lengthParam = argv[0];
-    ST_S32 lengthValue =
-        (intptr_t)ST_sendMsg(ctx, lengthParam, rgetSymb, 0, NULL);
-    ST_Object newSymb = ST_symb(ctx, "new");
-    ST_S32 i;
-    enum { LOC_arr, LOC_cLNode, LOC_list, LOC_nodeInst, LOC_count };
-    ST_Object *locals = ST_pushLocals(ctx, LOC_count);
-    ST_Internal_Object **ivars;
-    locals[LOC_arr] = ST_Class_makeInstance(ctx, self);
-    locals[LOC_cLNode] = ST_getGlobal(ctx, ST_symb(ctx, "ListNode"));
-    locals[LOC_list] = ST_getNil(ctx);
-    ivars = ST_Object_getIVars(locals[LOC_arr]);
-    if (lengthValue <= 0) {
-        goto final;
-    }
-    for (i = 0; i < lengthValue; ++i) {
-        ST_Internal_Object **nodeVars;
-        locals[LOC_nodeInst] =
-            ST_sendMsg(ctx, locals[LOC_cLNode], newSymb, 0, NULL);
-        nodeVars = ST_Object_getIVars(locals[LOC_nodeInst]);
-        nodeVars[0] = locals[LOC_list];
-        locals[LOC_list] = locals[LOC_nodeInst];
-    }
-    ivars[0] = locals[LOC_list];
-    /* TODO: implement clone method for int, or new method that takes a val */
-    ivars[1] = ST_sendMsg(ctx, ST_getGlobal(ctx, ST_symb(ctx, "Integer")),
-                          newSymb, 0, NULL);
-    ST_sendMsg(ctx, ivars[1], ST_symb(ctx, "rawSet:"), 1,
-               (ST_Object *)&lengthValue);
-    result = locals[LOC_arr];
-final:
-    ST_popLocals(ctx);
-    return result;
-}
-
-static ST_Internal_Object **ST_Array_deref(ST_Object ctx, ST_Object arr,
-                                           ST_Object idx) {
-    ST_Object rgetSymb = ST_symb(ctx, "rawGet");
-    ST_Internal_Object **ivars = ST_Object_getIVars(arr);
-    const ST_S32 index = (intptr_t)ST_sendMsg(ctx, idx, rgetSymb, 0, NULL);
-    ST_S32 length = (intptr_t)ST_sendMsg(ctx, ivars[1], rgetSymb, 0, NULL);
-    if (index > -1 && index < length) {
-        ST_S32 i = 0;
-        ST_Object node = ivars[0];
-        while (true) {
-            if (i == index) {
-                return &ST_Object_getIVars(node)[1];
-            }
-            ++i;
-            node = ST_Object_getIVars(node)[0];
-        }
-    }
-    return NULL;
+    ST_S32 size = (intptr_t)ST_sendMsg(ctx, lengthParam, rgetSymb, 0, NULL);
+    ST_Class *arraySpec = ST_Class_subclass(ctx, self, NULL, size, 0);
+    arraySpec->name = ((ST_Class *)self)->name;
+    return ST_Class_makeInstance(ctx, arraySpec);
 }
 
 const char *ST_repr(ST_Object ctx, ST_Object obj) {
@@ -1138,40 +1106,32 @@ const char *ST_repr(ST_Object ctx, ST_Object obj) {
 }
 
 static ST_Object ST_Array_at(ST_Object ctx, ST_Object self, ST_Object argv[]) {
-    ST_Internal_Object **element;
-    if ((element = ST_Array_deref(ctx, self, argv[0]))) {
-        return *element;
+    const ST_S32 index = ST_unboxInt(ctx, argv[0]);
+    if (index < ((ST_Internal_Object *)self)->class->instanceVariableCount) {
+        return ST_Object_getIVars(self)[index];
     }
     /* TODO: raise exception */
     return ST_getNil(ctx);
 }
 
 static ST_Object ST_Array_set(ST_Object ctx, ST_Object self, ST_Object argv[]) {
-    ST_Internal_Object **element;
-    if ((element = ST_Array_deref(ctx, self, argv[0]))) {
-        *element = argv[1];
-        return ST_getNil(ctx);
+    const ST_S32 index = ST_unboxInt(ctx, argv[0]);
+    if (index < ((ST_Internal_Object *)self)->class->instanceVariableCount) {
+        ST_Object_getIVars(self)[index] = argv[1];
     }
     /* TODO: raise exception */
     return ST_getNil(ctx);
 }
 
 static ST_Object ST_Array_len(ST_Object ctx, ST_Object self, ST_Object argv[]) {
-    /* FIXME: return a clone!!! */
-    return ST_Object_getIVars(self)[1];
+    return ST_getInteger(
+        ctx, ((ST_Internal_Object *)self)->class->instanceVariableCount);
 }
 
 static void ST_initArray(ST_Context *ctx) {
     ST_Class *cObj = ST_getGlobal(ctx, ST_symb(ctx, "Object"));
     ST_Object arraySymb = ST_symb(ctx, "Array");
-    ST_Object listNodeSymb = ST_symb(ctx, "ListNode");
-    ST_Class *cArr = ST_Class_subclass(ctx, cObj, arraySymb, 2, 0);
-    ST_Class *cNode = ST_Class_subclass(ctx, cObj, listNodeSymb, 2, 0);
-    cArr->instanceVariableNames[0] = ST_symb(ctx, "data");
-    cArr->instanceVariableNames[1] = ST_symb(ctx, "length");
-    cNode->instanceVariableNames[0] = ST_symb(ctx, "next");
-    cNode->instanceVariableNames[1] = ST_symb(ctx, "element");
-    ST_setGlobal(ctx, listNodeSymb, cNode);
+    ST_Class *cArr = ST_Class_subclass(ctx, cObj, arraySymb, 0, 0);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "length"), ST_Array_len, 0);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "new:"), ST_Array_new, 1);
     ST_setMethod(ctx, cArr, ST_symb(ctx, "at:"), ST_Array_at, 1);
