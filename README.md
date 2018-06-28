@@ -13,7 +13,7 @@ The VM's nearly feature complete. Current status:
  - [ ] Class Variables
  - [ ] Reflection
  - [x] Global Variables
- - [x] Strict Garbage Collection
+ - [x] Strict, Compacting Garbage Collection
  - [x] Symbols
  - [x] Arrays
  - [x] Integers
