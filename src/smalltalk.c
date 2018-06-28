@@ -21,8 +21,9 @@ static void ST_memset(ST_Object ctx, void *memory, int val, ST_Size n);
 static void ST_memcpy(ST_Object ctx, void *dest, const void *src, ST_Size n);
 static void ST_free(ST_Object ctx, void *memory);
 
-static struct ST_Internal_Object *ST_GC_allocObject(struct ST_Context *ctx,
-                                                    ST_Size size);
+struct ST_Class;
+static struct ST_Internal_Object *
+ST_GC_allocInstance(struct ST_Context *ctx, const struct ST_Class *class);
 
 /*//////////////////////////////////////////////////////////////////////////////
 // Helper functions
@@ -158,11 +159,7 @@ static void ST_Pool_release(ST_Object ctx, ST_Pool *pool) {
 // Object struct
 /////////////////////////////////////////////////////////////////////////////*/
 
-enum ST_GC_Mask {
-    ST_GC_MASK_ALIVE = 1,
-    ST_GC_MASK_MARKED = 1 << 1,
-    ST_GC_MASK_PRESERVE = 1 << 2
-};
+enum ST_GC_Mask { ST_GC_MASK_MARKED = 1u << 0, ST_GC_MASK_PRESERVE = 1u << 1 };
 
 typedef struct ST_Internal_Object {
     struct ST_Class *class;
@@ -196,7 +193,7 @@ typedef struct ST_Context {
     struct ST_Internal_Object *falseValue;
     ST_StackFrame *stackFrame;
     struct OperandStack {
-        const struct ST_Internal_Object **base;
+        struct ST_Internal_Object **base;
         struct ST_Internal_Object **top;
     } operandStack;
     struct Heap {
@@ -208,7 +205,7 @@ typedef struct ST_Context {
     ST_Pool methodNodePool;
     ST_Pool strmapNodePool;
     ST_Pool classPool;
-    ST_Pool integerPool;
+    ST_Pool symbolPool;
     bool gcDisabled;
 } ST_Context;
 
@@ -242,7 +239,7 @@ ST_Object *ST_pushLocals(ST_Object ctx, ST_Size count) {
     for (i = 0; i < count; ++i) {
         ST_pushStack(ctx, ST_getNil(ctx));
     }
-    return (ST_Object *)((ST_Context *)ctx)->operandStack.top;
+    return (ST_Object *)((ST_Context *)ctx)->operandStack.top - count;
 }
 
 void ST_popLocals(ST_Object ctx) { ST_popStackFrame(ctx); }
@@ -493,13 +490,9 @@ static void ST_Object_setGCMask(ST_Object obj, enum ST_GC_Mask mask) {
     ((ST_Internal_Object *)obj)->gcMask |= mask;
 }
 
-/* static void ST_Object_unsetGCMask(ST_Object obj, enum ST_GC_Mask mask) { */
-/*     ((ST_Internal_Object *)obj)->gcMask &= ~mask; */
-/* } */
-
-/* static bool ST_Object_matchGCMask(ST_Object obj, enum ST_GC_Mask mask) { */
-/*     return ((ST_Internal_Object *)obj)->gcMask & mask; */
-/* } */
+static void ST_Object_unsetGCMask(ST_Object obj, enum ST_GC_Mask mask) {
+    ((ST_Internal_Object *)obj)->gcMask &= ~mask;
+}
 
 static ST_Internal_Object **ST_Object_getIVars(ST_Internal_Object *object) {
     return (void *)((ST_U8 *)object + sizeof(ST_Internal_Object));
@@ -527,14 +520,14 @@ ST_Object ST_getSuper(ST_Object ctx, ST_Object object) {
 }
 
 ST_Internal_Object *ST_Class_makeInstance(ST_Context *ctx, ST_Class *class) {
-    ST_Internal_Object *instance = ST_GC_allocObject(ctx, class->instanceSize);
+    ST_Internal_Object *instance = ST_GC_allocInstance(ctx, class);
     ST_Internal_Object **ivars = ST_Object_getIVars(instance);
     ST_Size i;
     for (i = 0; i < class->instanceVariableCount; ++i) {
         ivars[i] = ST_getNil(ctx);
     }
     instance->class = class;
-    ST_Object_setGCMask(instance, ST_GC_MASK_ALIVE);
+    instance->gcMask = 0;
     return instance;
 }
 
@@ -544,7 +537,6 @@ static ST_Class *ST_Class_subclass(ST_Context *ctx, ST_Class *super,
                                    ST_Size classVariableCount) {
     ST_Class *sub = ST_Pool_alloc(ctx, &((ST_Context *)ctx)->classPool);
     sub->object.class = sub;
-    ST_Object_setGCMask(sub, ST_GC_MASK_ALIVE);
     sub->super = super;
     sub->instanceVariableCount =
         ((ST_Class *)super)->instanceVariableCount + instanceVariableCount;
@@ -590,6 +582,15 @@ static void ST_failedMethodLookup(ST_Object ctx, ST_Object receiver,
                                   ST_Object symbol) {
     ST_Object cMNU = ST_getGlobal(ctx, ST_symb(ctx, "MessageNotUnderstood"));
     ST_Object err = ST_sendMsg(ctx, cMNU, ST_symb(ctx, "new"), 0, NULL);
+    { /* FIXME 
+         At the moment, we have not implemented doesNotUnderstand, so this
+         function will blow up the stack, but before it does that, it will 
+         vm's heap by allocating tons of MessageNotUnderstoods. So busy wait
+         for now.
+      */
+        while (true)
+            ;
+    }
     ST_sendMsg(ctx, receiver, ST_symb(ctx, "doesNotUnderstand:"), 1, &err);
 }
 
@@ -673,6 +674,10 @@ static void ST_memcpy(ST_Object ctx, void *dest, const void *src, ST_Size n) {
     ((ST_Context *)ctx)->config.memory.copyFn(dest, src, n);
 }
 
+static void ST_memmove(ST_Object ctx, void *dest, const void *src, ST_Size n) {
+    ((ST_Context *)ctx)->config.memory.moveFn(dest, src, n);
+}
+
 static void ST_memset(ST_Object ctx, void *memory, int val, ST_Size n) {
     ((ST_Context *)ctx)->config.memory.setFn(memory, val, n);
 }
@@ -705,8 +710,7 @@ static ST_Object ST_refStack(struct ST_Context *ctx, ST_Size offset) {
 }
 
 static ST_Size ST_stackSize(struct ST_Context *ctx) {
-    return (const ST_Internal_Object **)ctx->operandStack.top -
-           ctx->operandStack.base;
+    return ctx->operandStack.top - ctx->operandStack.base;
 }
 
 ST_Object ST_getGlobal(ST_Object ctx, ST_Object symbol) {
@@ -769,9 +773,8 @@ ST_Object ST_symb(ST_Object ctx, const char *symbolName) {
     newEntry = ST_Pool_alloc(ctx, &extCtx->strmapNodePool);
     ST_BST_Node_init((ST_BST_Node *)newEntry);
     newEntry->key = ST_strdup(ctx, symbolName);
-    newSymb = ST_sendMsg(ctx, ST_getGlobal(ctx, ST_symb(ctx, "Symbol")),
-                         ST_symb(ctx, "new"), 0, NULL);
-    ST_Object_setGCMask(newSymb, ST_GC_MASK_PRESERVE);
+    newSymb = ST_Pool_alloc(ctx, &extCtx->symbolPool);
+    newSymb->class = ST_getGlobal(ctx, ST_symb(ctx, "Symbol"));
     newEntry->value = newSymb;
     if (!ST_BST_insert((ST_BST_Node **)&extCtx->symbolRegistry,
                        &newEntry->nodeHeader, ST_StringMap_comparator)) {
@@ -1056,7 +1059,6 @@ static void ST_initInteger(ST_Context *ctx) {
     cInt->super = cObj;
     cInt->object.class = cInt;
     cInt->name = intSymb;
-    ST_Object_setGCMask(cInt, ST_GC_MASK_ALIVE);
     ST_setMethod(ctx, cInt, ST_symb(ctx, "+"), ST_Integer_add, 1);
     ST_setMethod(ctx, cInt, ST_symb(ctx, "-"), ST_Integer_sub, 1);
     ST_setMethod(ctx, cInt, ST_symb(ctx, "*"), ST_Integer_mul, 1);
@@ -1129,6 +1131,10 @@ static ST_Internal_Object **ST_Array_deref(ST_Object ctx, ST_Object arr,
         }
     }
     return NULL;
+}
+
+const char *ST_repr(ST_Object ctx, ST_Object obj) {
+    return ST_Symbol_toString(ctx, ((ST_Internal_Object *)obj)->class->name);
 }
 
 static ST_Object ST_Array_at(ST_Object ctx, ST_Object self, ST_Object argv[]) {
@@ -1235,10 +1241,12 @@ static bool ST_Context_bootstrap(ST_Context *ctx) {
     cObject->methodTree = NULL;
     cObject->instanceVariableCount = 0;
     cObject->instanceVariableNames = NULL;
-    cObject->instanceSize = 0;
+    cObject->instanceSize = sizeof(ST_Internal_Object);
     cSymbol = ST_Class_subclass(ctx, cObject, NULL, 0, 0);
-    symbolSymbol = ST_Class_makeInstance(ctx, cSymbol);
-    newSymbol = ST_Class_makeInstance(ctx, cSymbol);
+    symbolSymbol = ST_Pool_alloc(ctx, &ctx->symbolPool);
+    symbolSymbol->class = cSymbol;
+    newSymbol = ST_Pool_alloc(ctx, &ctx->symbolPool);
+    newSymbol->class = cSymbol;
     ST_Object_setGCMask(symbolSymbol, ST_GC_MASK_PRESERVE);
     ST_Object_setGCMask(newSymbol, ST_GC_MASK_PRESERVE);
     ctx->symbolRegistry = ST_Pool_alloc(ctx, &ctx->strmapNodePool);
@@ -1254,6 +1262,7 @@ static bool ST_Context_bootstrap(ST_Context *ctx) {
     ST_BST_insert((ST_BST_Node **)&ctx->symbolRegistry, &newEntry->nodeHeader,
                   ST_StringMap_comparator);
     ST_setMethod(ctx, cObject, newSymbol, ST_new, 0);
+    cSymbol->name = ST_symb(ctx, "Symbol");
     ST_setGlobal(ctx, ST_symb(ctx, "Object"), cObject);
     return true;
 }
@@ -1338,11 +1347,10 @@ ST_Object ST_createContext(const ST_Configuration *config) {
     ST_Pool_init(ctx, &ctx->methodNodePool, sizeof(ST_MethodMap_Entry), 512);
     ST_Pool_init(ctx, &ctx->strmapNodePool, sizeof(ST_StringMap_Entry), 512);
     ST_Pool_init(ctx, &ctx->classPool, sizeof(ST_Class), 100);
-    ST_Pool_init(ctx, &ctx->integerPool, sizeof(ST_Integer), 128);
+    ST_Pool_init(ctx, &ctx->symbolPool, sizeof(ST_Internal_Object), 100);
     ctx->operandStack.base = ST_alloc(ctx, sizeof(ST_Internal_Object *) *
                                                config->memory.stackCapacity);
-    ctx->operandStack.top =
-        (struct ST_Internal_Object **)ctx->operandStack.base;
+    ctx->operandStack.top = ctx->operandStack.base;
     ctx->heap.begin = ST_alloc(ctx, config->memory.heapCapacity);
     ctx->heap.end = ctx->heap.begin;
     ST_pushStackFrame(ctx, 0, NULL);
@@ -1372,7 +1380,7 @@ void ST_destroyContext(ST_Object ctx) {
     ST_Pool_release(ctx, &ctxImpl->methodNodePool);
     ST_Pool_release(ctx, &ctxImpl->strmapNodePool);
     ST_Pool_release(ctx, &ctxImpl->classPool);
-    ST_Pool_release(ctx, &ctxImpl->integerPool);
+    ST_Pool_release(ctx, &ctxImpl->symbolPool);
     ST_free(ctx, ctx);
 }
 
@@ -1387,7 +1395,9 @@ static void ST_GC_markObject(ST_Context *ctx, ST_Internal_Object *object) {
         ST_Internal_Object **ivars = ST_Object_getIVars(object);
         ST_Size i;
         for (i = 0; i < object->class->instanceVariableCount; ++i) {
-            ST_GC_markObject(ctx, ivars[i]);
+            if ((ST_GC_MASK_MARKED & ivars[i]->gcMask) == 0) {
+                ST_GC_markObject(ctx, ivars[i]);
+            }
         }
         ST_GC_markObject(ctx, (ST_Object)object->class);
     } else /* We're a class */ {
@@ -1406,7 +1416,7 @@ typedef struct ST_GC_Visitor {
 
 static void ST_GC_visitGVar(ST_Visitor *visitor, void *gvar) {
     ST_GC_markObject(((ST_GC_Visitor *)visitor)->ctx,
-                     ((ST_SymbolMap_Entry *)gvar)->symbol);
+                     ((ST_GlobalVarMap_Entry *)gvar)->value);
 }
 
 static void ST_GC_mark(ST_Context *ctx) {
@@ -1414,36 +1424,146 @@ static void ST_GC_mark(ST_Context *ctx) {
     ST_Size i;
     ST_GC_Visitor visitor;
     for (i = 0; i < opStackSize; ++i) {
-        ST_GC_markObject(ctx, ST_refStack(ctx, i));
+        ST_GC_markObject(ctx, ctx->operandStack.base[i]);
     }
     visitor.ctx = ctx;
     visitor.visitor.visit = ST_GC_visitGVar;
     ST_BST_traverse((ST_BST_Node *)ctx->globalScope, (ST_Visitor *)&visitor);
 }
 
-static void ST_GC_compact(ST_Context *ctx) {
-    /* TODO: implement me! */
-    while (true)
-        ;
+typedef struct ST_GC_CompactionNode {
+    ST_U8 *gapAddr;
+    ST_Size gapSize;
+    struct ST_GC_CompactionNode *next;
+} ST_GC_CompactionNode;
+
+typedef struct ST_GC_CompactionState {
+    ST_GC_CompactionNode *erasures;
+    ST_Pool cpNodePool;
+} ST_GC_CompactionState;
+
+static ST_Internal_Object *ST_GC_remapObjectAddr(ST_Context *ctx,
+                                                 ST_GC_CompactionNode *erasures,
+                                                 ST_Internal_Object *obj) {
+    ST_Size shiftAmount = 0;
+    if (/* Note: because symbol and class objects don't live on the heap */
+        (ST_U8 *)obj > ctx->heap.begin) {
+        while (erasures && erasures->gapAddr < (ST_U8 *)obj) {
+            shiftAmount += erasures->gapSize;
+            erasures = erasures->next;
+        }
+    }
+    return (ST_Internal_Object *)((ST_U8 *)obj - shiftAmount);
 }
 
-static void ST_GC_run(ST_Object ctx) {
+static void ST_GC_compactHeap(ST_Context *ctx, ST_GC_CompactionState *cpState) {
+    ST_Internal_Object *current = (ST_Internal_Object *)ctx->heap.begin;
+    ST_Size bytesCompacted = 0;
+    while ((ST_U8 *)current < ctx->heap.end) {
+        enum { LIVE_OBJ_MASK = ST_GC_MASK_MARKED | ST_GC_MASK_PRESERVE };
+        const ST_Size currentSize = current->class->instanceSize;
+        if (current->gcMask & LIVE_OBJ_MASK) {
+            if (bytesCompacted) {
+                ST_U8 *targetAddr = (ST_U8 *)current - bytesCompacted;
+                ST_memmove(ctx, targetAddr, current, currentSize);
+            }
+            ST_Object_unsetGCMask(current, ST_GC_MASK_MARKED);
+        } else /* current is a dead object */ {
+            const bool adjacentDealloc =
+                cpState->erasures &&
+                cpState->erasures->gapAddr + cpState->erasures->gapSize ==
+                    (ST_U8 *)current;
+            if (adjacentDealloc) {
+                cpState->erasures->gapSize += currentSize;
+            } else {
+                ST_GC_CompactionNode *cp =
+                    ST_Pool_alloc(ctx, &cpState->cpNodePool);
+                cp->gapAddr = (ST_U8 *)current;
+                cp->gapSize = currentSize;
+                cp->next = cpState->erasures;
+                cpState->erasures = cp;
+            }
+            bytesCompacted += currentSize;
+        }
+        current = (ST_Internal_Object *)((ST_U8 *)current + currentSize);
+    }
+    ctx->heap.end = ctx->heap.end - bytesCompacted;
+}
+
+static void ST_GC_remapIVars(ST_Context *ctx, ST_GC_CompactionState *cpState) {
+    ST_Internal_Object *current = (ST_Internal_Object *)ctx->heap.begin;
+    while ((ST_U8 *)current < ctx->heap.end) {
+        const ST_Size currentSize = current->class->instanceSize;
+        ST_Internal_Object **ivars = ST_Object_getIVars(current);
+        ST_Size i;
+        for (i = 0; i < current->class->instanceVariableCount; ++i) {
+            const ST_Object newAddr =
+                ST_GC_remapObjectAddr(ctx, cpState->erasures, ivars[i]);
+            ivars[i] = newAddr;
+        }
+        current = (ST_Internal_Object *)((ST_U8 *)current + currentSize);
+    }
+}
+
+typedef struct ST_GC_RemapVisitor {
+    ST_Visitor visitor;
+    ST_Context *ctx;
+    ST_GC_CompactionNode *cpList;
+} ST_GC_RemapVisitor;
+
+static void ST_GC_remapGVar(ST_Visitor *visitor, void *gvar) {
+    ((ST_GlobalVarMap_Entry *)gvar)->value =
+        ST_GC_remapObjectAddr(((ST_GC_RemapVisitor *)visitor)->ctx,
+                              ((ST_GC_RemapVisitor *)visitor)->cpList,
+                              ((ST_GlobalVarMap_Entry *)gvar)->value);
+}
+
+static void ST_GC_remapGVarsAfterCompact(ST_Context *ctx,
+                                         ST_GC_CompactionState *cpState) {
+    ST_GC_RemapVisitor visitor;
+    visitor.ctx = ctx;
+    visitor.visitor.visit = ST_GC_remapGVar;
+    ST_BST_traverse((ST_BST_Node *)ctx->globalScope, (ST_Visitor *)&visitor);
+}
+
+static void ST_GC_remapStackAfterCompact(ST_Context *ctx,
+                                         ST_GC_CompactionState *cpState) {
+    const ST_Size stackSize = ST_stackSize(ctx);
+    ST_Size i;
+    for (i = 0; i < stackSize; ++i) {
+        ctx->operandStack.base[i] = ST_GC_remapObjectAddr(
+            ctx, cpState->erasures, ctx->operandStack.base[i]);
+    }
+}
+
+static void ST_GC_compact(ST_Context *ctx) {
+    struct ST_GC_CompactionState cpState;
+    cpState.erasures = NULL;
+    ST_Pool_init(ctx, &cpState.cpNodePool, sizeof(ST_GC_CompactionNode), 128);
+    ST_GC_compactHeap(ctx, &cpState);
+    ST_GC_remapIVars(ctx, &cpState);
+    ST_GC_remapGVarsAfterCompact(ctx, &cpState);
+    ST_GC_remapStackAfterCompact(ctx, &cpState);
+    ST_Pool_release(ctx, &cpState.cpNodePool);
+}
+
+void ST_GC_run(ST_Object ctx) {
     ST_GC_mark(ctx);
     ST_GC_compact(ctx);
-    /* TODO: compact */
 }
 
-static struct ST_Internal_Object *ST_GC_allocObject(ST_Context *ctx,
-                                                    ST_Size objSize) {
+static struct ST_Internal_Object *ST_GC_allocInstance(ST_Context *ctx,
+                                                      const ST_Class *class) {
+    const ST_Size allocSize = class->instanceSize;
     const bool outOfMemory =
-        (ST_Size)(ctx->heap.end - ctx->heap.begin) + objSize >=
+        (ST_Size)(ctx->heap.end - ctx->heap.begin) + allocSize >=
         ctx->config.memory.heapCapacity;
     ST_Internal_Object *result;
     if (UNEXPECTED(outOfMemory)) {
         ST_GC_run(ctx);
     }
     result = (ST_Internal_Object *)ctx->heap.end;
-    ctx->heap.end += objSize;
+    ctx->heap.end += allocSize;
     return result;
 }
 

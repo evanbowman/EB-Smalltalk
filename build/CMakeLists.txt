@@ -29,6 +29,7 @@ if(UNIT)
   unit_test(number)
   unit_test(array)
   unit_test(members)
+  unit_test(gc)
 endif(UNIT)
 
 option(AUTOFORMAT "run clang-format after running make")

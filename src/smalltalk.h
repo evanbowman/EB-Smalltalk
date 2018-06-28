@@ -37,6 +37,7 @@ ST_Object ST_getTrue(ST_Object context);
 ST_Object ST_getFalse(ST_Object context);
 ST_Object ST_getInteger(ST_Object context, ST_S32 value);
 ST_S32 ST_unboxInt(ST_Object integer);
+const char *ST_repr(ST_Object context, ST_Object obj);
 
 /* Store the results of API calls in a local var array, to prevent the GC
    from collecting your objects. Note that Symbol Objects returned by
@@ -53,11 +54,14 @@ ST_S32 ST_unboxInt(ST_Object integer);
 ST_Object *ST_pushLocals(ST_Object ctx, ST_Size count);
 void ST_popLocals(ST_Object ctx);
 
+void ST_GC_run(ST_Object ctx);
+
 typedef struct ST_Configuration {
     struct Memory {
         void *(*allocFn)(size_t);
         void (*freeFn)(void *);
         void *(*copyFn)(void *, const void *, size_t);
+        void *(*moveFn)(void *, const void *, size_t);
         void *(*setFn)(void *, int c, size_t n);
         /* Stack capacity in units of number of Object references */
         ST_Size stackCapacity;
@@ -68,7 +72,7 @@ typedef struct ST_Configuration {
 
 #define ST_DEFAULT_CONFIG                                                      \
     {                                                                          \
-        { malloc, free, memcpy, memset, 1024, 10000 }                          \
+        { malloc, free, memcpy, memmove, memset, 1024, 10000 }                 \
     }
 
 ST_Object ST_createContext(const ST_Configuration *config);
