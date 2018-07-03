@@ -248,19 +248,40 @@ void ST_popLocals(ST_Object ctx) { ST_popStackFrame(ctx); }
 // Search Tree (Intrusive BST)
 /////////////////////////////////////////////////////////////////////////////*/
 
-typedef struct ST_BST_Node {
-    struct ST_BST_Node *left;
-    struct ST_BST_Node *right;
-} ST_BST_Node;
+typedef struct ST_BiNode {
+    struct ST_BiNode *left;
+    struct ST_BiNode *right;
+} ST_BiNode;
 
-static void ST_BST_Node_init(ST_BST_Node *node) {
+static void ST_BiNode_init(ST_BiNode *node) {
     node->left = NULL;
     node->right = NULL;
 }
 
-static void ST_BST_splay(ST_BST_Node **t, void *key,
+static void ST_List_insert(ST_BiNode **list, ST_BiNode *node) {
+    node->right = *list;
+    if (*list) {
+        (*list)->left = node;
+    }
+    node->left = NULL;
+    *list = node;
+}
+
+static void ST_List_prev(ST_BiNode **list) { *list = (*list)->left; }
+
+static ST_BiNode *ST_List_end(ST_BiNode *list) {
+    ST_BiNode *current = list;
+    if (list) {
+        while (list->right) {
+            current = list->right;
+        }
+    }
+    return current;
+}
+
+static void ST_BST_splay(ST_BiNode **t, void *key,
                          ST_Cmp (*comparator)(void *, void *)) {
-    ST_BST_Node N, *l, *r, *y;
+    ST_BiNode N, *l, *r, *y;
     N.left = N.right = NULL;
     l = r = &N;
     while (true) {
@@ -300,9 +321,9 @@ static void ST_BST_splay(ST_BST_Node **t, void *key,
     (*t)->right = N.left;
 }
 
-static bool ST_BST_insert(ST_BST_Node **root, ST_BST_Node *node,
+static bool ST_BST_insert(ST_BiNode **root, ST_BiNode *node,
                           ST_Cmp (*comparator)(void *, void *)) {
-    ST_BST_Node *current = *root;
+    ST_BiNode *current = *root;
     if (UNEXPECTED(!*root)) {
         *root = node;
         return true;
@@ -317,6 +338,7 @@ static bool ST_BST_insert(ST_BST_Node **root, ST_BST_Node *node,
                 break;
             } else {
                 current->left = node;
+                ST_BiNode_init(node);
                 return true;
             }
         case ST_Cmp_Less:
@@ -325,16 +347,17 @@ static bool ST_BST_insert(ST_BST_Node **root, ST_BST_Node *node,
                 break;
             } else {
                 current->right = node;
+                ST_BiNode_init(node);
                 return true;
             }
         }
     };
 }
 
-static ST_BST_Node *ST_BST_remove(ST_BST_Node **root, void *key,
-                                  ST_Cmp (*comp)(void *, void *)) {
-    ST_BST_Node *current = *root;
-    ST_BST_Node **backlink = root;
+static ST_BiNode *ST_BST_remove(ST_BiNode **root, void *key,
+                                ST_Cmp (*comp)(void *, void *)) {
+    ST_BiNode *current = *root;
+    ST_BiNode **backlink = root;
     if (UNEXPECTED(!current)) {
         return NULL;
     }
@@ -348,9 +371,9 @@ static ST_BST_Node *ST_BST_remove(ST_BST_Node **root, void *key,
             } else if (!current->left && current->right) {
                 *backlink = current->right;
             } else {
-                ST_BST_Node **maxBacklink = &current->left;
-                ST_BST_Node *max = current->left;
-                ST_BST_Node temp;
+                ST_BiNode **maxBacklink = &current->left;
+                ST_BiNode *max = current->left;
+                ST_BiNode temp;
                 while (max->right) {
                     maxBacklink = &max->right;
                     max = max->right;
@@ -382,9 +405,9 @@ static ST_BST_Node *ST_BST_remove(ST_BST_Node **root, void *key,
     }
 }
 
-static ST_BST_Node *ST_BST_find(ST_BST_Node **root, void *key,
-                                ST_Cmp (*comp)(void *, void *)) {
-    ST_BST_Node *current = *root;
+static ST_BiNode *ST_BST_find(ST_BiNode **root, void *key,
+                              ST_Cmp (*comp)(void *, void *)) {
+    ST_BiNode *current = *root;
     if (UNEXPECTED(!*root))
         return NULL;
     while (true) {
@@ -407,8 +430,8 @@ static ST_BST_Node *ST_BST_find(ST_BST_Node **root, void *key,
     }
 }
 
-static void ST_BST_traverse(ST_BST_Node *root, ST_Visitor *visitor) {
-    ST_BST_Node *current, *parent;
+static void ST_BST_traverse(ST_BiNode *root, ST_Visitor *visitor) {
+    ST_BiNode *current, *parent;
     if (root == NULL)
         return;
     current = root;
@@ -438,7 +461,7 @@ static void ST_BST_traverse(ST_BST_Node *root, ST_Visitor *visitor) {
 /////////////////////////////////////////////////////////////////////////////*/
 
 typedef struct ST_SymbolMap_Entry {
-    ST_BST_Node node;
+    ST_BiNode node;
     ST_Object symbol;
 } ST_SymbolMap_Entry;
 
@@ -562,9 +585,9 @@ ST_Internal_Object_getMethod(ST_Object ctx, ST_Internal_Object *obj,
     ST_Class *currentClass = obj->class;
     while (true) {
         ST_SymbolMap_Entry searchTmpl;
-        ST_BST_Node *found;
+        ST_BiNode *found;
         searchTmpl.symbol = symbol;
-        found = ST_BST_find((ST_BST_Node **)&currentClass->methodTree,
+        found = ST_BST_find((ST_BiNode **)&currentClass->methodTree,
                             &searchTmpl, ST_SymbolMap_comparator);
         if (found) {
             return &((ST_MethodMap_Entry *)found)->method;
@@ -630,11 +653,11 @@ ST_Object ST_sendMsg(ST_Object ctx, ST_Object receiver, ST_Object symbol,
 
 static bool ST_Class_insertMethodEntry(ST_Object ctx, ST_Class *class,
                                        ST_MethodMap_Entry *entry) {
-    if (!ST_BST_insert((ST_BST_Node **)&((ST_Class *)class)->methodTree,
+    if (!ST_BST_insert((ST_BiNode **)&((ST_Class *)class)->methodTree,
                        &entry->header.node, ST_SymbolMap_comparator)) {
         return false;
     }
-    ST_BST_splay((ST_BST_Node **)&((ST_Class *)class)->methodTree,
+    ST_BST_splay((ST_BiNode **)&((ST_Class *)class)->methodTree,
                  &entry->header.node, ST_SymbolMap_comparator);
     return true;
 }
@@ -643,7 +666,6 @@ void ST_setMethod(ST_Object ctx, ST_Object object, ST_Object symbol,
                   ST_PrimitiveMethod primitiveMethod, ST_U8 argc) {
     ST_Pool *methodPool = &((ST_Context *)ctx)->methodNodePool;
     ST_MethodMap_Entry *entry = ST_Pool_alloc(ctx, methodPool);
-    ST_BST_Node_init((ST_BST_Node *)entry);
     entry->header.symbol = symbol;
     entry->method.type = ST_METHOD_TYPE_PRIMITIVE;
     entry->method.payload.primitiveMethod = primitiveMethod;
@@ -683,7 +705,7 @@ static void ST_memset(ST_Object ctx, void *memory, int val, ST_Size n) {
 }
 
 typedef struct ST_StringMap_Entry {
-    ST_BST_Node nodeHeader;
+    ST_BiNode nodeHeader;
     char *key;
     void *value;
 } ST_StringMap_Entry;
@@ -714,8 +736,8 @@ static ST_Size ST_stackSize(struct ST_Context *ctx) {
 }
 
 ST_Object ST_getGlobal(ST_Object ctx, ST_Object symbol) {
-    ST_BST_Node *found;
-    ST_BST_Node **globalScope = (void *)&((ST_Context *)ctx)->globalScope;
+    ST_BiNode *found;
+    ST_BiNode **globalScope = (void *)&((ST_Context *)ctx)->globalScope;
     ST_SymbolMap_Entry searchTmpl;
     searchTmpl.symbol = symbol;
     found = ST_BST_find(globalScope, &searchTmpl, ST_SymbolMap_comparator);
@@ -729,23 +751,22 @@ ST_Object ST_getGlobal(ST_Object ctx, ST_Object symbol) {
 void ST_setGlobal(ST_Object ctx, ST_Object symbol, ST_Object object) {
     ST_Context *ctxImpl = ctx;
     ST_SymbolMap_Entry searchTmpl;
-    ST_BST_Node *found;
+    ST_BiNode *found;
     searchTmpl.symbol = symbol;
     if (UNEXPECTED(object == ST_getNil(ctx))) {
-        ST_BST_Node *removed =
-            ST_BST_remove((ST_BST_Node **)&ctxImpl->globalScope, &searchTmpl,
+        ST_BiNode *removed =
+            ST_BST_remove((ST_BiNode **)&ctxImpl->globalScope, &searchTmpl,
                           ST_SymbolMap_comparator);
         ST_Pool_free(ctx, &ctxImpl->gvarNodePool, removed);
-    } else if ((found = ST_BST_find((ST_BST_Node **)&ctxImpl->globalScope,
+    } else if ((found = ST_BST_find((ST_BiNode **)&ctxImpl->globalScope,
                                     &searchTmpl, ST_SymbolMap_comparator))) {
         ((ST_GlobalVarMap_Entry *)found)->value = object;
     } else {
         ST_GlobalVarMap_Entry *entry =
             ST_Pool_alloc(ctxImpl, &ctxImpl->gvarNodePool);
-        ST_BST_Node_init((ST_BST_Node *)entry);
         entry->header.symbol = symbol;
         entry->value = object;
-        if (!ST_BST_insert((ST_BST_Node **)&ctxImpl->globalScope,
+        if (!ST_BST_insert((ST_BiNode **)&ctxImpl->globalScope,
                            &entry->header.node, ST_SymbolMap_comparator)) {
             ST_Pool_free(ctx, &ctxImpl->gvarNodePool, entry);
         }
@@ -760,23 +781,22 @@ ST_Object ST_getFalse(ST_Object ctx) { return ((ST_Context *)ctx)->falseValue; }
 
 ST_Object ST_symb(ST_Object ctx, const char *symbolName) {
     ST_Context *extCtx = ctx;
-    ST_BST_Node *found;
+    ST_BiNode *found;
     ST_StringMap_Entry searchTmpl;
     ST_StringMap_Entry *newEntry;
     ST_Internal_Object *newSymb;
     searchTmpl.key = (char *)symbolName;
-    found = ST_BST_find((ST_BST_Node **)&extCtx->symbolRegistry, &searchTmpl,
+    found = ST_BST_find((ST_BiNode **)&extCtx->symbolRegistry, &searchTmpl,
                         ST_StringMap_comparator);
     if (found) {
         return (ST_Object)((ST_StringMap_Entry *)found)->value;
     }
     newEntry = ST_Pool_alloc(ctx, &extCtx->strmapNodePool);
-    ST_BST_Node_init((ST_BST_Node *)newEntry);
     newEntry->key = ST_strdup(ctx, symbolName);
     newSymb = ST_Pool_alloc(ctx, &extCtx->symbolPool);
     newSymb->class = ST_getGlobal(ctx, ST_symb(ctx, "Symbol"));
     newEntry->value = newSymb;
-    if (!ST_BST_insert((ST_BST_Node **)&extCtx->symbolRegistry,
+    if (!ST_BST_insert((ST_BiNode **)&extCtx->symbolRegistry,
                        &newEntry->nodeHeader, ST_StringMap_comparator)) {
         ST_free(ctx, newEntry->key);
         ST_Pool_free(ctx, &extCtx->strmapNodePool, newEntry);
@@ -805,7 +825,7 @@ const char *ST_Symbol_toString(ST_Object ctx, ST_Object symbol) {
     visitor.visitor.visit = ST_findSymbolNameByValue;
     visitor.key = symbol;
     visitor.result = NULL;
-    ST_BST_traverse((ST_BST_Node *)((ST_Context *)ctx)->symbolRegistry,
+    ST_BST_traverse((ST_BiNode *)((ST_Context *)ctx)->symbolRegistry,
                     (ST_Visitor *)&visitor);
     return visitor.result;
 }
@@ -948,7 +968,6 @@ static void ST_Internal_VM_execute(ST_Context *ctx) {
                 ctx->stackFrame->code->instructions[ctx->stackFrame->ip++];
             ST_MethodMap_Entry *entry =
                 ST_Pool_alloc(ctx, &ctx->methodNodePool);
-            ST_BST_Node_init((ST_BST_Node *)entry);
             entry->header.symbol = symbol;
             entry->method.type = ST_METHOD_TYPE_COMPILED;
             entry->method.argc = argc;
@@ -1195,7 +1214,6 @@ static bool ST_Context_bootstrap(ST_Context *ctx) {
     ST_Internal_Object *symbolSymbol;
     ST_Internal_Object *newSymbol;
     ST_StringMap_Entry *newEntry = ST_Pool_alloc(ctx, &ctx->strmapNodePool);
-    ST_BST_Node_init((ST_BST_Node *)newEntry);
     cObject->object.class = cObject;
     cObject->super = NULL;
     cObject->methodTree = NULL;
@@ -1210,16 +1228,14 @@ static bool ST_Context_bootstrap(ST_Context *ctx) {
     ST_Object_setGCMask(symbolSymbol, ST_GC_MASK_PRESERVE);
     ST_Object_setGCMask(newSymbol, ST_GC_MASK_PRESERVE);
     ctx->symbolRegistry = ST_Pool_alloc(ctx, &ctx->strmapNodePool);
-    ST_BST_Node_init((ST_BST_Node *)ctx->symbolRegistry);
     ctx->symbolRegistry->key = ST_strdup(ctx, "Symbol");
     ctx->symbolRegistry->value = symbolSymbol;
     ctx->globalScope = ST_Pool_alloc(ctx, &ctx->gvarNodePool);
-    ST_BST_Node_init((ST_BST_Node *)ctx->globalScope);
     ctx->globalScope->header.symbol = symbolSymbol;
     ctx->globalScope->value = (ST_Object)cSymbol;
     newEntry->key = ST_strdup(ctx, "new");
     newEntry->value = newSymbol;
-    ST_BST_insert((ST_BST_Node **)&ctx->symbolRegistry, &newEntry->nodeHeader,
+    ST_BST_insert((ST_BiNode **)&ctx->symbolRegistry, &newEntry->nodeHeader,
                   ST_StringMap_comparator);
     ST_setMethod(ctx, cObject, newSymbol, ST_new, 0);
     cSymbol->name = ST_symb(ctx, "Symbol");
@@ -1329,7 +1345,7 @@ void ST_destroyContext(ST_Object ctx) {
     ST_Context *ctxImpl = ctx;
     while (ctxImpl->symbolRegistry) {
         ST_StringMap_Entry *removedSymb = (ST_StringMap_Entry *)ST_BST_remove(
-            (ST_BST_Node **)&ctxImpl->symbolRegistry, ctxImpl->symbolRegistry,
+            (ST_BiNode **)&ctxImpl->symbolRegistry, ctxImpl->symbolRegistry,
             ST_StringMap_comparator);
         ST_free(ctx, removedSymb->key);
     }
@@ -1388,29 +1404,29 @@ static void ST_GC_mark(ST_Context *ctx) {
     }
     visitor.ctx = ctx;
     visitor.visitor.visit = ST_GC_visitGVar;
-    ST_BST_traverse((ST_BST_Node *)ctx->globalScope, (ST_Visitor *)&visitor);
+    ST_BST_traverse((ST_BiNode *)ctx->globalScope, (ST_Visitor *)&visitor);
 }
 
-typedef struct ST_GC_CompactionNode {
+typedef struct ST_GC_CompactionBreak {
+    ST_BiNode node;
     ST_U8 *gapAddr;
     ST_Size gapSize;
-    struct ST_GC_CompactionNode *next;
-} ST_GC_CompactionNode;
+} ST_GC_CompactionBreak;
 
 typedef struct ST_GC_CompactionState {
-    ST_GC_CompactionNode *erasures;
-    ST_Pool cpNodePool;
+    ST_GC_CompactionBreak *breakList;
+    ST_Pool breakPool;
 } ST_GC_CompactionState;
 
-static ST_Internal_Object *ST_GC_remapObjectAddr(ST_Context *ctx,
-                                                 ST_GC_CompactionNode *erasures,
-                                                 ST_Internal_Object *obj) {
+static ST_Internal_Object *
+ST_GC_remapObjectAddr(ST_Context *ctx, ST_GC_CompactionBreak *brLstEnd,
+                      ST_Internal_Object *obj) {
     ST_Size shiftAmount = 0;
-    if (/* Note: because symbol and class objects don't live on the heap */
-        (ST_U8 *)obj > ctx->heap.begin) {
-        while (erasures && erasures->gapAddr < (ST_U8 *)obj) {
-            shiftAmount += erasures->gapSize;
-            erasures = erasures->next;
+    if ((ST_U8 *)obj >= ctx->heap.begin && (ST_U8 *)obj < ctx->heap.end) {
+        ST_GC_CompactionBreak *current = brLstEnd;
+        while (current && current->gapAddr < (ST_U8 *)obj) {
+            shiftAmount += current->gapSize;
+            ST_List_prev((ST_BiNode **)&current);
         }
     }
     return (ST_Internal_Object *)((ST_U8 *)obj - shiftAmount);
@@ -1430,18 +1446,18 @@ static void ST_GC_compactHeap(ST_Context *ctx, ST_GC_CompactionState *cpState) {
             ST_Object_unsetGCMask(current, ST_GC_MASK_MARKED);
         } else /* current is a dead object */ {
             const bool adjacentDealloc =
-                cpState->erasures &&
-                cpState->erasures->gapAddr + cpState->erasures->gapSize ==
+                cpState->breakList &&
+                cpState->breakList->gapAddr + cpState->breakList->gapSize ==
                     (ST_U8 *)current;
             if (adjacentDealloc) {
-                cpState->erasures->gapSize += currentSize;
+                cpState->breakList->gapSize += currentSize;
             } else {
-                ST_GC_CompactionNode *cp =
-                    ST_Pool_alloc(ctx, &cpState->cpNodePool);
-                cp->gapAddr = (ST_U8 *)current;
-                cp->gapSize = currentSize;
-                cp->next = cpState->erasures;
-                cpState->erasures = cp;
+                ST_GC_CompactionBreak *cbreak =
+                    ST_Pool_alloc(ctx, &cpState->breakPool);
+                cbreak->gapAddr = (ST_U8 *)current;
+                cbreak->gapSize = currentSize;
+                ST_List_insert((ST_BiNode **)&cpState->breakList,
+                               (ST_BiNode *)cbreak);
             }
             bytesCompacted += currentSize;
         }
@@ -1450,7 +1466,7 @@ static void ST_GC_compactHeap(ST_Context *ctx, ST_GC_CompactionState *cpState) {
     ctx->heap.end = ctx->heap.end - bytesCompacted;
 }
 
-static void ST_GC_remapIVars(ST_Context *ctx, ST_GC_CompactionState *cpState) {
+static void ST_GC_remapIVars(ST_Context *ctx, ST_GC_CompactionBreak *brLstEnd) {
     ST_Internal_Object *current = (ST_Internal_Object *)ctx->heap.begin;
     while ((ST_U8 *)current < ctx->heap.end) {
         const ST_Size currentSize = current->class->instanceSize;
@@ -1458,7 +1474,7 @@ static void ST_GC_remapIVars(ST_Context *ctx, ST_GC_CompactionState *cpState) {
         ST_Size i;
         for (i = 0; i < current->class->instanceVariableCount; ++i) {
             const ST_Object newAddr =
-                ST_GC_remapObjectAddr(ctx, cpState->erasures, ivars[i]);
+                ST_GC_remapObjectAddr(ctx, brLstEnd, ivars[i]);
             ivars[i] = newAddr;
         }
         current = (ST_Internal_Object *)((ST_U8 *)current + currentSize);
@@ -1468,7 +1484,7 @@ static void ST_GC_remapIVars(ST_Context *ctx, ST_GC_CompactionState *cpState) {
 typedef struct ST_GC_RemapVisitor {
     ST_Visitor visitor;
     ST_Context *ctx;
-    ST_GC_CompactionNode *cpList;
+    ST_GC_CompactionBreak *cpList;
 } ST_GC_RemapVisitor;
 
 static void ST_GC_remapGVar(ST_Visitor *visitor, void *gvar) {
@@ -1479,32 +1495,36 @@ static void ST_GC_remapGVar(ST_Visitor *visitor, void *gvar) {
 }
 
 static void ST_GC_remapGVarsAfterCompact(ST_Context *ctx,
-                                         ST_GC_CompactionState *cpState) {
+                                         ST_GC_CompactionBreak *brLstEnd) {
     ST_GC_RemapVisitor visitor;
+    visitor.cpList = brLstEnd;
     visitor.ctx = ctx;
     visitor.visitor.visit = ST_GC_remapGVar;
-    ST_BST_traverse((ST_BST_Node *)ctx->globalScope, (ST_Visitor *)&visitor);
+    ST_BST_traverse((ST_BiNode *)ctx->globalScope, (ST_Visitor *)&visitor);
 }
 
 static void ST_GC_remapStackAfterCompact(ST_Context *ctx,
-                                         ST_GC_CompactionState *cpState) {
+                                         ST_GC_CompactionBreak *brLstEnd) {
     const ST_Size stackSize = ST_stackSize(ctx);
     ST_Size i;
     for (i = 0; i < stackSize; ++i) {
-        ctx->operandStack.base[i] = ST_GC_remapObjectAddr(
-            ctx, cpState->erasures, ctx->operandStack.base[i]);
+        ctx->operandStack.base[i] =
+            ST_GC_remapObjectAddr(ctx, brLstEnd, ctx->operandStack.base[i]);
     }
 }
 
 static void ST_GC_compact(ST_Context *ctx) {
     struct ST_GC_CompactionState cpState;
-    cpState.erasures = NULL;
-    ST_Pool_init(ctx, &cpState.cpNodePool, sizeof(ST_GC_CompactionNode), 128);
+    ST_GC_CompactionBreak *brListEnd;
+    cpState.breakList = NULL;
+    ST_Pool_init(ctx, &cpState.breakPool, sizeof(ST_GC_CompactionBreak), 128);
     ST_GC_compactHeap(ctx, &cpState);
-    ST_GC_remapIVars(ctx, &cpState);
-    ST_GC_remapGVarsAfterCompact(ctx, &cpState);
-    ST_GC_remapStackAfterCompact(ctx, &cpState);
-    ST_Pool_release(ctx, &cpState.cpNodePool);
+    brListEnd =
+        (ST_GC_CompactionBreak *)ST_List_end((ST_BiNode *)cpState.breakList);
+    ST_GC_remapIVars(ctx, brListEnd);
+    ST_GC_remapGVarsAfterCompact(ctx, brListEnd);
+    ST_GC_remapStackAfterCompact(ctx, brListEnd);
+    ST_Pool_release(ctx, &cpState.breakPool);
 }
 
 void ST_GC_run(ST_Object ctx) {
@@ -1531,23 +1551,6 @@ static struct ST_Internal_Object *ST_GC_allocInstance(ST_Context *ctx,
 // Bytecode loading
 /////////////////////////////////////////////////////////////////////////////*/
 
-static bool isLittleEndian() {
-    const ST_U32 num = 1;
-    return ((ST_U8 *)&num)[0] == 1;
-}
-
-static void ST_bswap16(ST_U16 *mem) {
-    *mem = ((ST_U16)((((ST_U16)(*mem) & (ST_U16)0x00ffU) << 8) |
-                     (((ST_U16)(*mem) & (ST_U16)0xff00U) >> 8)));
-}
-
-static void ST_bswap32(ST_U32 *mem) {
-    *mem = ((ST_U32)((((ST_U32)(*mem) & (ST_U32)0x000000ffU) << 24) |
-                     (((ST_U32)(*mem) & (ST_U32)0x0000ff00U) << 8) |
-                     (((ST_U32)(*mem) & (ST_U32)0x00ff0000U) >> 8) |
-                     (((ST_U32)(*mem) & (ST_U32)0xff000000U) >> 24)));
-}
-
 ST_Code ST_VM_load(ST_Object ctx, const ST_U8 *data, ST_Size len) {
     /* Note: symbol table is a list of null-terminated symbol strings, where
        the final symbol in the table is followed by two terminators. */
@@ -1571,38 +1574,5 @@ ST_Code ST_VM_load(ST_Object ctx, const ST_U8 *data, ST_Size len) {
     code.length = len;
     code.instructions = ST_alloc(ctx, len);
     ST_memcpy(ctx, code.instructions, data, len);
-    if (!isLittleEndian()) {
-        for (i = 0; i < len; ++i) {
-            switch (code.instructions[i]) {
-            case ST_VM_OP_PUSHNIL:
-            case ST_VM_OP_PUSHTRUE:
-            case ST_VM_OP_PUSHFALSE:
-            case ST_VM_OP_PUSHSUPER:
-            case ST_VM_OP_DUP:
-            case ST_VM_OP_POP:
-            case ST_VM_OP_SWAP:
-            case ST_VM_OP_RETURN:
-                break;
-
-            case ST_VM_OP_GETGLOBAL:
-            case ST_VM_OP_SETGLOBAL:
-            case ST_VM_OP_SENDMSG:
-            case ST_VM_OP_GETIVAR:
-            case ST_VM_OP_SETIVAR:
-            case ST_VM_OP_PUSHSYMBOL:
-                ST_bswap16((ST_U16 *)&code.instructions[i + 1]);
-                i += sizeof(ST_U16);
-                break;
-
-            case ST_VM_OP_SETMETHOD: {
-                ST_bswap16((ST_U16 *)&code.instructions[i + 1]);
-                i += sizeof(ST_U16) + sizeof(ST_U8);
-                ST_bswap32((ST_U32 *)&code.instructions[i + 1]);
-                i += sizeof(ST_U32);
-                /* TODO */
-            } break;
-            }
-        }
-    }
     return code;
 }
